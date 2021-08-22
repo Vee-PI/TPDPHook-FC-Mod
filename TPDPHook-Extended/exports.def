@@ -1,0 +1,13 @@
+EXPORTS
+	CreateDXGIFactory
+	CreateDXGIFactory1
+	CreateDXGIFactory2
+	CompatString
+	CompatValue
+	DXGID3D10CreateDevice
+	DXGID3D10CreateLayeredDevice
+	DXGID3D10RegisterLayers
+	DXGIDeclareAdapterRemovalSupport
+	DXGIDumpJournal
+	DXGIGetDebugInterface1
+	DXGIReportAdapterConfiguration
