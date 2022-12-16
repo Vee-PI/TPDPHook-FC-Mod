@@ -12,3 +12,4 @@ HOOKAPI void register_custom_skill(unsigned int effect_id, SkillCall skill_func)
 HOOKAPI void register_custom_skill_activator(unsigned int effect_id, ActivatorCall activator_func);
 HOOKAPI void copy_skill_anim(unsigned int src, unsigned int dest);
 HOOKAPI void init_new_skill(unsigned int id);
+HOOKAPI void copy_skill_effect(unsigned int src, unsigned int dest);

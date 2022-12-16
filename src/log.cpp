@@ -59,10 +59,10 @@ static void log_file(const wchar_t *msg, LogLevel level)
     else if((g_repcount > 0) && (msg != g_lastlog))
     {
         g_logfile << L"Previous message repeated " << g_repcount << L" times.\n\n";
-        g_lastlog = msg;
         g_repcount = 0;
     }
 
+    g_lastlog = msg;
     g_logfile << prefix << msg << L"\n\n";
     g_logfile.flush();
 }

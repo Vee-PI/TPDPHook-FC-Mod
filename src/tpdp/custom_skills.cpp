@@ -23,6 +23,13 @@ static auto g_season_duration = 5;
 static auto g_id_delirium = ID_NONE;
 static auto g_id_custom1 = ID_NONE;
 static auto g_id_custom2 = ID_NONE;
+static auto g_id_sting = ID_NONE;
+static auto g_id_refresh = ID_NONE;
+//static auto g_id_solar = ID_NONE;
+static auto g_id_future = ID_NONE;
+static auto g_id_fading = ID_NONE;
+
+int g_future_turns[2]{};
 
 typedef std::pair<Status, Status> StatusPair;
 static std::vector<StatusPair> g_calamity_statuses;
@@ -31,6 +38,37 @@ int __cdecl season_activator(int /*player*/)
 {
     skill_succeeded() = 1;
     return 1;
+}
+
+int __cdecl solar_activator(int player)
+{
+    if(get_battle_state(player)->field_0xdc != 0)
+        return RVA(0x1a2ee0).ptr<int(__cdecl*)(int)>()(player);
+    skill_succeeded() = 1;
+    return 1;
+}
+
+int __cdecl future_activator(int player)
+{
+    if(g_future_turns[player] == 0)
+        return RVA(0x1a2ee0).ptr<int(__cdecl*)(int)>()(player);
+    skill_succeeded() = 0;
+    return 0;
+}
+
+int __cdecl fading_activator(int player)
+{
+    auto data = get_battle_data();
+    *(RVA(0x941fa8).ptr<int*>()) = 0;
+
+    if(data[player == 0].state.field_0x16e == 0)
+    {
+        skill_succeeded() = 1;
+        return 1;
+    }
+
+    skill_succeeded() = 0;
+    return 0;
 }
 
 // Realm skill modified to work with timegazer/stargazer.
@@ -167,6 +205,89 @@ int __cdecl skill_delirium(int player, int /*effect_chance*/)
     }
 }
 
+int __cdecl skill_sting(int player, int /*effect_chance*/)
+{
+    auto& skill_state = get_skill_state();
+    switch(skill_state)
+    {
+    case 0:
+        if(!skill_succeeded())
+        {
+            skill_state = 3;
+            return 0;
+        }
+        reset_status_anim();
+        skill_state = 1;
+        return 1;
+
+    case 1:
+        if(apply_status_effect(!player, STATUS_POIS, STATUS_PARA) == 0)
+        {
+            skill_state = 2;
+            return 0;
+        }
+        return 1;
+
+    default:
+        return 0;
+        break;
+    }
+}
+
+int __cdecl skill_refresh(int player, int /*effect_chance*/)
+{
+    auto& skill_state = get_skill_state();
+    auto state = get_battle_state(player);
+    static int _frames = 0;
+    switch(skill_state)
+    {
+    case 0:
+        if(!skill_succeeded())
+        {
+            skill_state = 3;
+            return 0;
+        }
+        reset_heal_anim(player);
+        state->active_puppet->status_effects[0] = 0;
+        state->active_puppet->status_effects[1] = 0;
+        for(auto& stat : state->stat_modifiers)
+            stat = 0;
+        skill_state = 1;
+        return 1;
+
+    case 1:
+        if(do_heal_anim() == 0)
+        {
+            skill_state = 2;
+            clear_battle_text();
+        }
+        return 1;
+
+    case 2:
+    {
+        auto name = std::string(state->active_nickname);
+        bool english = tpdp_eng_translation();
+        if(player != 0)
+            name = (english ? "Enemy " : "相手の　") + name;
+        auto msg = name + (english ? " cleared its status effects\\nand stat modifiers!" : " は 自身の状態異常と\\n能力変化を 元に戻した！");
+        if(set_battle_text(msg) != 1)
+        {
+            if(++_frames > get_game_fps())
+            {
+                skill_state = 3;
+                _frames = 0;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    default:
+        return 0;
+        break;
+    }
+}
+
 // calamity/supernova
 int __cdecl skill_custom1(int player, int /*effect_chance*/)
 {
@@ -218,6 +339,180 @@ int __cdecl skill_custom2(int player, int /*effect_chance*/)
     return 0;
 }
 
+#if 0
+// solar beam
+int __cdecl skill_solar(int player, int /*effect_chance*/)
+{
+    auto& skill_state = get_skill_state();
+    auto state = get_battle_state(player);
+    static int _frames = 0;
+    switch(skill_state)
+    {
+    case 0:
+        if(!skill_succeeded())
+        {
+            skill_state = 4;
+            return 0;
+        }
+        if(state->field_0xdc > 0)
+        {
+            skill_state = 4;
+            state->field_0xdc = 0;
+            return 0;
+        }
+        _frames = 0;
+        state->field_0x46 = RVA(0x1ba140).ptr<uint(__cdecl*)(uint, uint, uint)>()(0xff, 0xff, 0xff);
+        skill_state = 1;
+        return 1;
+
+    case 1:
+        if((state->field_0x4a += 24.0f) >= 255.0f)
+        {
+            skill_state = 2;
+            state->field_0x4a = 255.0f;
+        }
+        return 1;
+
+    case 2:
+        if((state->field_0x4a -= 24.0f) <= 0.0f)
+        {
+            skill_state = 3;
+            state->field_0x4a = 0.0f;
+            clear_battle_text();
+        }
+        return 1;
+
+    case 3:
+    {
+        auto name = std::string(state->active_nickname);
+        //bool english = tpdp_eng_translation();
+        auto msg = "The power of ligma wells up\\nwithin " + name + "!";
+        if(set_battle_text(msg.c_str()) != 1)
+        {
+            if(++_frames > get_game_fps())
+            {
+                auto terrainstate = get_terrain_state();
+                state->field_0xdc = (terrainstate->weather_type == WEATHER_CALM) ? 3 : 2;
+                skill_state = 4;
+                _frames = 0;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    default:
+        return 0;
+        break;
+    }
+}
+#endif
+
+int __cdecl skill_future(int player, int /*effect_chance*/)
+{
+    auto& skill_state = get_skill_state();
+    static int _frames = 0;
+    switch(skill_state)
+    {
+    case 0:
+        if(!skill_succeeded() || (g_future_turns[player] > 0))
+        {
+            skill_state = 2;
+            return 1;
+        }
+        g_future_turns[player] = 3;
+        clear_battle_text();
+        skill_state = 1;
+        return 1;
+
+    case 1:
+    {
+        auto state = get_battle_state(player);
+        auto name = std::string(state->active_nickname);
+        bool english = tpdp_eng_translation();
+        if(player != 0)
+            name = (english ? "Enemy " : "相手の　") + name;
+        auto msg = name + (english ? " set a bomb!" : " は 爆弾を 仕掛けた！");
+        if(set_battle_text(msg) != 1)
+        {
+            if(++_frames > get_game_fps())
+            {
+                skill_state = 3;
+                _frames = 0;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    case 2:
+    {
+        bool english = tpdp_eng_translation();
+        if(set_battle_text(english ? "But the skill failed." : "しかし スキルは 失敗した。") != 1)
+        {
+            if(++_frames > get_game_fps())
+            {
+                skill_state = 3;
+                _frames = 0;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    default:
+        return 0;
+        break;
+    }
+}
+
+#if 0
+int __cdecl skill_fading(int player, int effect_chance)
+{
+    auto changeling = RVA(0x1a5420).ptr<SkillCall>();
+    auto otherdata = &get_battle_data()[!player];
+    if((short)otherdata->puppets[otherdata->active_puppet_index].hp > 0)
+        return changeling(player, effect_chance);
+    auto data = &get_battle_data()[player];
+    auto state = &data->state;
+    PartyPuppet puppet;
+    if(state->field_0x9e == 0)
+        state->field_0x9e = 2;
+    for(auto i = 0; i < 6; ++i)
+    {
+        if(i == data->active_puppet_index)
+            continue;
+        puppet = decrypt_puppet(&data->puppets[i]);
+        if((puppet.puppet_id != 0) && ((short)puppet.hp > 0))
+            goto do_thing;
+    }
+    return 0;
+
+do_thing:
+    auto func = RVA(0x11ed0).ptr<uint8_t*(*)()>();
+    *(RVA(0xc59b2a).ptr<uint8_t*>()) = 0xff;
+    auto puVar5 = func();
+    puVar5[1] = 10;
+    puVar5 = func();
+    puVar5[2] = 4;
+    puVar5 = func();
+    puVar5[3] = 0xb;
+    puVar5 = func();
+    puVar5[4] = 4;
+    puVar5 = func();
+    puVar5[5] = 0xc;
+    puVar5 = func();
+    puVar5[6] = 0xd;
+    puVar5 = func();
+    puVar5[7] = 0xe;
+    puVar5 = func();
+    puVar5[8] = 5;
+    RVA(0x287c0).ptr<void(*)()>()();
+    *(RVA(0x941fa8).ptr<int*>()) = 0;
+    return 0;
+}
+#endif
+
 // Bind skill functions to effect ids.
 void init_custom_skills()
 {
@@ -260,6 +555,46 @@ void init_custom_skills()
     {
         init_new_skill(g_id_delirium);
         register_custom_skill(g_id_delirium, &skill_delirium);
+    }
+
+    g_id_sting = IniFile::global.get_uint("skills", "effect_id_sting");
+    if(g_id_sting != ID_NONE)
+    {
+        init_new_skill(g_id_sting);
+        register_custom_skill(g_id_sting, &skill_sting);
+    }
+
+    g_id_refresh = IniFile::global.get_uint("skills", "effect_id_refresh");
+    if(g_id_refresh != ID_NONE)
+    {
+        init_new_skill(g_id_refresh);
+        register_custom_skill(g_id_refresh, &skill_refresh);
+    }
+
+#if 0
+    g_id_solar = IniFile::global.get_uint("skills", "effect_id_solar");
+    if(g_id_solar != ID_NONE)
+    {
+        init_new_skill(g_id_solar);
+        register_custom_skill(g_id_solar, &skill_solar);
+        register_custom_skill_activator(g_id_solar, &solar_activator);
+    }
+#endif
+
+    g_id_future = IniFile::global.get_uint("skills", "effect_id_future");
+    if(g_id_future != ID_NONE)
+    {
+        init_new_skill(g_id_future);
+        register_custom_skill(g_id_future, &skill_future);
+        register_custom_skill_activator(g_id_future, &future_activator);
+    }
+
+    g_id_fading = IniFile::global.get_uint("skills", "effect_id_fading");
+    if(g_id_fading != ID_NONE)
+    {
+        copy_skill_effect(60, g_id_fading);
+        //register_custom_skill(g_id_fading, RVA(0x1a5420).ptr<SkillCall>());
+        register_custom_skill_activator(g_id_fading, &fading_activator);
     }
 
     // pre-build table of status combos for supernova/calamity

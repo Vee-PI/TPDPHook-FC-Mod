@@ -10,6 +10,7 @@
 #include "../version.h"
 #include "../plugin.h"
 #include "../textconvert.h"
+#include "../network.h"
 #include "custom_skills.h"
 #include "misc_hacks.h"
 #include "custom_abilities.h"
@@ -141,6 +142,23 @@ void copy_skill_anim(unsigned int src, unsigned int dest)
 
     for(auto i = 0; i < 5; ++i)
         g_anim_tables[i][dest] = g_orig_anims[i][src];
+}
+
+void copy_skill_effect(unsigned int src, unsigned int dest)
+{
+    if(src >= 1024)
+    {
+        LOG_WARN() << L"Skill anim source ID out of range: " << src;
+        return;
+    }
+    if(dest >= 1024)
+    {
+        LOG_WARN() << L"Skill anim dest ID out of range: " << dest;
+        return;
+    }
+
+    for(auto i = 0; i < 6; ++i)
+        g_effect_tables[i][dest] = g_orig_effects[i][src];
 }
 
 void init_new_skill(unsigned int id)
@@ -308,6 +326,7 @@ void tpdp_install_hooks()
     }
 
     g_hooks_installed = true;
+    init_networking();
     init_misc_hacks();
     init_custom_abilities();
 }
@@ -315,6 +334,7 @@ void tpdp_install_hooks()
 void tpdp_uninstall_hooks()
 {
     // uninstall? pffft!
+    shutdown_networking();
 }
 
 // GetPrivateProfileStringA

@@ -447,3 +447,13 @@ void reset_heal_anim(int player)
     *RVA(0x93c870).ptr<uint32_t*>() = 0;
     *RVA(0x93ccbc).ptr<uint32_t*>() = 0;
 }
+
+void load_puppet_sprite(int puppet_id)
+{
+    auto loadsprite = RVA(0x15ba30).ptr<void*>();
+    __asm
+    {
+        mov edi, puppet_id
+        call loadsprite
+    }
+}

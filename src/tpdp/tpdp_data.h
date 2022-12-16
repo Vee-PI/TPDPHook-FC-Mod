@@ -251,3 +251,5 @@ HOOKAPI double get_type_multiplier(int player, BattleState *state, uint16_t skil
 // Call every frame till 0 returned
 HOOKAPI int do_heal_anim();
 HOOKAPI void reset_heal_anim(int player); // call before calling do_heal_anim
+
+HOOKAPI void load_puppet_sprite(int puppet_id);

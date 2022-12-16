@@ -15,11 +15,11 @@ is heavily commented with examples.
 You will be required to launch the game with one of the modified executables from the [patches](patches) folder or from the official extended mod release.
 
 ## Programming Guide
-API for accessing game code/data: [tpdp_data.h](TPDPHook-Extended/tpdp/tpdp_data.h)  
-Skill implementations: [custom_skills.cpp](TPDPHook-Extended/tpdp/custom_skills.cpp)  
-Switch-in abilities: [custom_abilities.cpp](TPDPHook-Extended/tpdp/custom_abilities.cpp)  
-Memory structures: [mem_structs.h](TPDPHook-Extended/tpdp/mem_structs.h)  
-Everything else (mostly): [misc_hacks.cpp](TPDPHook-Extended/tpdp/misc_hacks.cpp)
+API for accessing game code/data: [tpdp_data.h](src/tpdp/tpdp_data.h)  
+Skill implementations: [custom_skills.cpp](src/tpdp/custom_skills.cpp)  
+Switch-in abilities: [custom_abilities.cpp](src/tpdp/custom_abilities.cpp)  
+Memory structures: [mem_structs.h](src/tpdp/mem_structs.h)  
+Everything else (mostly): [misc_hacks.cpp](src/tpdp/misc_hacks.cpp)
 
 Skill/Ability/Item callback functions are called once every frame and generally use some sort of state machine
 implementation to keep track of their state between calls.  
@@ -57,6 +57,20 @@ bool item_dispatch()
 
 ## Compiling
 Prerequisites:  
-Visual Studio 2019 or newer.
+[CMake](https://cmake.org/), and Visual Studio 2022.
 
-No dependencies, just open the MSVC project file and click build.
+Cloning the repo:  
+Make sure to clone with submodules: `git clone --recurse-submodules https://github.com/php42/TPDPHook-Extended.git`  
+If you already cloned without submodules, you can get them like so: `git submodule update --init --recursive`
+
+Configuration:  
+For easy setup, you can just run [configure.bat](configure.bat) in the root of the source tree 
+(requires CMake to be installed with the "add to system PATH" option).  
+This will create a subfolder called `build` which contains the Visual Studio project files.
+
+Notes:
+`configure.bat` assumes VS 2022, however any version of VS supporting C++17 may be used if you plan to run CMake yourself.  
+The following constraints apply regardless of compiler used:
+- Must target 32-bit x86
+- Must be built with SSE2 enabled (to avoid clobbering x87 state)
+- Must support inline assembly and `__declspec(naked)`

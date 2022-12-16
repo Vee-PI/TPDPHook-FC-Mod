@@ -1,5 +1,6 @@
 #include "ini_parser.h"
 #include "log.h"
+#include "internal_config.h"
 #include <fstream>
 #include <cctype>
 #include <sstream>
@@ -60,6 +61,11 @@ void IniFile::read(const std::filesystem::path& path)
     std::ifstream f(path);
 
     sections_.clear();
+
+#ifdef USE_INTERNAL_CONFIG
+    std::istringstream default_config(G_INTERNAL_CONFIG);
+    parse(default_config);
+#endif // USE_INTERNAL_CONFIG
     parse(f);
 }
 

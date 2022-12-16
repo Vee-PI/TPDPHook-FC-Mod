@@ -3,10 +3,17 @@
 #include "../ini_parser.h"
 #include "../hook.h"
 #include "../log.h"
+#include "../network.h"
 #include "hook_tpdp.h"
+#include "custom_skills.h"
+#include "archive.h"
+#include "gamedata.h"
 #include <cassert>
 #include <algorithm>
 #include <set>
+#include <memory>
+#include <mutex>
+#include <regex>
 
 /*      HERE LIES SPICY JANK
  * This file contains unholy hackery
@@ -19,6 +26,9 @@ static void *g_mine_return_addr = nullptr;
 static void *g_stealth_return_addr = nullptr;
 static void *g_bind_return_addr = nullptr;
 static void *g_pois_return_addr = nullptr;
+static void *g_sprintf_addr = nullptr;
+//static void *g_music_return_addr = nullptr;
+//static void *g_music_hackreturn_addr = nullptr;
 
 // item IDs
 static auto g_id_boots = ID_NONE;
@@ -51,16 +61,39 @@ static auto g_id_astronomy = ID_NONE;
 static auto g_id_empowered = ID_NONE;
 static auto g_id_drain_abl = ID_NONE;
 static auto g_id_calm_traveler = ID_NONE;
+unsigned int g_id_form_change = ID_NONE;
+unsigned int g_id_form_target = ID_NONE;
+unsigned int g_id_form_target_style = ID_NONE;
+static auto g_id_form_base = ID_NONE;
+static auto g_id_form_base_style = ID_NONE;
+static auto g_id_morale = ID_NONE;
+static auto g_id_curse = ID_NONE;
+static auto g_id_merciless = ID_NONE;
+static auto g_id_choice_focus = ID_NONE;
+static auto g_id_choice_spread = ID_NONE;
 
 // ability mods
 static auto g_mod_class_abl = 0.1;
 static auto g_mod_drain_heal = 1.0 / 8.0;
 static auto g_mod_drain_def = 0.8;
 static auto g_mod_calm_traveler = 2.0;
+static auto g_mod_merciless = 1.5;
+static auto g_mod_choice = 1.5;
 
 // skills
 static auto g_id_blitzkrieg = ID_NONE;
 static double g_mod_blitzkrieg = 2.0;
+static auto g_id_future_skill = ID_NONE;
+static bool g_patch_miracle = false;
+
+bool g_form_changes[2][6]{};
+
+static std::unique_ptr<uint32_t[]> g_music_handle_buf;
+static std::unique_ptr<uint32_t[]> g_music_loop_buf;
+
+std::once_flag g_music_init;
+
+std::string g_website_url = "";
 
 // NOTE: we technically should be doing some XSAVE and FXSAVEs in here
 // but the game does not use SSE and our code does not use x87 (except floating point return values)
@@ -71,6 +104,25 @@ struct alignas(16) FXSaveData
 {
     uint8_t buf[512];
 };
+*/
+
+/* // replaced by ../network.cpp
+uint32_t ip_str_to_be32(const std::string& str)
+{
+    std::smatch m;
+    std::regex ip_regex(R"(^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}))");
+    if(std::regex_search(str, m, ip_regex))
+    {
+        auto p1 = (uint32_t)std::stoul(m[1]) & 0xFF;
+        auto p2 = (uint32_t)std::stoul(m[2]) & 0xFF;
+        auto p3 = (uint32_t)std::stoul(m[3]) & 0xFF;
+        auto p4 = (uint32_t)std::stoul(m[4]) & 0xFF;
+
+        return (p1 << 0) | (p2 << 8) | (p3 << 16) | (p4 << 24);
+    }
+
+    return 0;
+}
 */
 
 // Secret Ceremony
@@ -110,7 +162,6 @@ void do_terrain_hook()
     }
 }
 
-/*
 // called when the battle state is reset
 // before a new battle begins
 void do_battlestate_reset()
@@ -120,8 +171,30 @@ void do_battlestate_reset()
     func();
 
     // reset any custom state here
+    for(auto i = 0; i < 2; ++i)
+        for(auto& j : g_form_changes[i])
+            j = false;
+
+    // future sight
+    for(auto& i : g_future_turns)
+        i = 0;
+
+    auto bdata = get_battle_data();
+    for(auto i = 0; i < 2; ++i) // load form change sprite if user present
+    {
+        for(auto& j : bdata[i].puppets)
+        {
+            auto puppet = decrypt_puppet(&j);
+            if((puppet.puppet_id == g_id_form_base) && (puppet.style_index == g_id_form_base_style))
+            {
+                load_puppet_sprite(g_id_form_target);
+                goto stop;
+            }
+        }
+    }
+stop:
+    return;
 }
-*/
 
 // override skill damage calculation
 // this overrides the *final result* of vanilla damage calculation
@@ -186,6 +259,18 @@ uint do_dmg_calc(BattleState *state, BattleState *otherstate, int player, [[mayb
         dmg *= g_mod_seiryu_seed; // also Yggdrasil Seed
     }
 
+    if((uint)state->active_ability == g_id_merciless)
+    {
+        for(auto status : otherpuppet.status_effects)
+        {
+            if(status != STATUS_NONE)
+            {
+                dmg *= g_mod_merciless; //merciless atk boost
+                break;
+            }
+        }
+    }
+
     if((int)dmg < 0)
     {
         dmg = 1;
@@ -239,6 +324,16 @@ int __stdcall do_battle_stats(BattleState *state, byte stat_index, bool crit, bo
 
     switch(stat_index)
     {
+    case STAT_FOATK:
+        if((uint)state->active_ability == g_id_choice_focus)
+            result *= g_mod_choice;
+        break;
+
+    case STAT_SPATK:
+        if((uint)state->active_ability == g_id_choice_spread)
+            result *= g_mod_choice;
+        break;
+
     case STAT_FODEF:
     case STAT_SPDEF:
         if((uint)state->active_ability == g_id_drain_abl) // Cursed Being def drop
@@ -247,9 +342,7 @@ int __stdcall do_battle_stats(BattleState *state, byte stat_index, bool crit, bo
 
     case STAT_SPEED:
         if((puppet.held_item == g_id_kohryu_seed) && (terrain_state->terrain_type == TERRAIN_KOHRYU) && (state->active_ability != 245) && (state->active_ability != 390))
-        {
             result *= g_mod_kohryu_seed; // Izanagi Object
-        }
 
         if(((uint)state->active_ability == g_id_calm_traveler) && (terrain_state->weather_type == WEATHER_CALM))
             result *= g_mod_calm_traveler; // Silent Running
@@ -272,8 +365,9 @@ SkillData *__fastcall do_adjusted_skill_data(int player, ushort skill_id)
     auto state = get_battle_state(player);
     auto otherstate = get_battle_state(!player);
     auto terrain_state = get_terrain_state();
-    const auto& basedata = get_skill_data()[(skill_id != 0) ? skill_id : state->active_skill_id];
-    if((data->effect_id == g_id_blitzkrieg) && ((state->turn_order == 0) || (otherstate->switched_puppet)))
+    auto curskill = (skill_id != 0) ? skill_id : state->active_skill_id;
+    const auto& basedata = get_skill_data()[curskill];
+    if((data->effect_id == g_id_blitzkrieg) && ((state->turn_order == 0) || (otherstate->num_turns == 0)))
         data->power = (byte)std::clamp((double)data->power * g_mod_blitzkrieg, 0.0, 255.0);
 
     if(((uint)state->active_ability == g_id_light_wings) && (basedata.element == ELEMENT_LIGHT))
@@ -281,15 +375,32 @@ SkillData *__fastcall do_adjusted_skill_data(int player, ushort skill_id)
         if((data->priority < 6) && ((uint)otherstate->active_ability != 341)) // Grand Opening
             data->priority += 1;
     }
-    else if(((uint)state->active_ability == g_id_astronomy) && (data->classification == SKILL_CLASS_BU))
+    else if(((uint)state->active_ability == g_id_astronomy) && (otherstate->active_ability != 335) && (data->classification == SKILL_CLASS_BU))
     {
         auto power = (double)data->power;
         data->power = (byte)std::clamp(power + (power * g_mod_class_abl), 0.0, 255.0); // Astronomy
     }
-    else if(((uint)state->active_ability == g_id_empowered) && (data->classification == SKILL_CLASS_EN))
+    else if(((uint)state->active_ability == g_id_empowered) && (otherstate->active_ability != 335) && (data->classification == SKILL_CLASS_EN))
     {
         auto power = (double)data->power;
         data->power = (byte)std::clamp(power + (power * g_mod_class_abl), 0.0, 255.0); // Empowered
+    }
+
+    // macroburst
+    /*if(curskill == 359)
+    {
+        if((terrain_state->weather_type == WEATHER_CALM) && (terrain_state->weather_duration > 0))
+            data->accuracy = 100;
+    }*/
+
+    // miracle reprisal
+    if(g_patch_miracle && (data->effect_id == 120))
+    {
+        auto boost = 0;
+        for(auto stat : otherstate->stat_modifiers)
+            if(stat > 0)
+                boost += ((int)stat * 30);
+        data->power = (byte)std::min((int)data->power + boost, 255);
     }
 
     // Pure Sand
@@ -330,11 +441,12 @@ static bool do_suzaku_seed(int player)
     case 1:
     {
         auto name = std::string(otherstate->active_nickname);
+        bool english = tpdp_eng_translation();
         if(player == 0)
-            name = "Enemy " + name;
-        if(set_battle_text(name + " took damage from the\\nSpirit Torch!") != 1)
+            name = (english ? "Enemy " : "相手の　") + name;
+        if(set_battle_text(name + (english ? " took damage from the\\nSpirit Torch!" : "は　スピリットトーチで\\nダメージを　受けた！")) != 1)
         {
-            if(++_frames > 60)
+            if(++_frames > get_game_fps())
             {
                 _frames = 0;
                 _state = 0;
@@ -439,6 +551,80 @@ static bool do_drain_abl(int player)
     }
 }
 
+static bool do_future(int player)
+{
+    static int _state = 0;
+    static int _frames = 0;
+    auto otherstate = get_battle_state(!player);
+
+    switch(_state)
+    {
+    case 0:
+    {
+        if(g_future_turns[player] == 0)
+            return false;
+        if(--g_future_turns[player] > 0)
+            return false;
+        auto typemod = get_type_multiplier(player, nullptr, (uint16_t)g_id_future_skill, nullptr);
+        if((otherstate->active_puppet != nullptr) && (typemod > 0) && (otherstate->active_ability != 297) && (otherstate->active_puppet->hp > 0))
+        {
+            auto otherpuppet = decrypt_puppet(otherstate->active_puppet);
+            auto maxhp = calculate_stat(STAT_HP, &otherpuppet);
+            auto dmg = (uint)(0.3 * typemod * maxhp);
+            dmg = std::max(std::min(dmg, (uint)otherstate->active_puppet->hp), 1u);
+            otherstate->active_puppet->hp -= (ushort)dmg;
+            clear_battle_text();
+            _state = 1;
+            return true;
+        }
+        clear_battle_text();
+        _state = 2;
+        return true;
+    }
+
+    case 1:
+    {
+        auto name = std::string(otherstate->active_nickname);
+        bool english = tpdp_eng_translation();
+        if(player == 0)
+            name = (english ? "Enemy " : "相手の　") + name;
+        auto msg = name + (english ? " was hit by a bomb!" : " に 爆弾が 命中した！");
+        if(set_battle_text(msg) != 1)
+        {
+            if(++_frames > get_game_fps())
+            {
+                _state = 0;
+                _frames = 0;
+                clear_battle_text();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    case 2:
+    {
+        bool english = tpdp_eng_translation();
+        if(set_battle_text(english ? "A bomb detonated!\\nBut it had no effect..." : "爆弾が 爆発した！\\nしかし 効果が無いようだ……") != 1)
+        {
+            if(++_frames > get_game_fps())
+            {
+                _state = 0;
+                _frames = 0;
+                clear_battle_text();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    default:
+        _state = 0;
+        _frames = 0;
+        return false;
+    }
+}
+
 // end-of-turn items
 // also jam in end-of-turn abilities
 static bool do_item(int player)
@@ -460,6 +646,12 @@ static bool do_item(int player)
     case 1:
         if(((uint)state->active_ability == g_id_drain_abl) && ((uint)otherstate->active_ability != 297) && do_drain_abl(player))
             return true;
+        _state = 2;
+        return true;
+
+    case 2:
+        if((g_id_future_skill != ID_NONE) && do_future(player))
+            return true;
         _state = 0;
         return false;
 
@@ -476,12 +668,12 @@ int __cdecl item_dispatch(int player)
     static auto _state = 0;
     if((item_state == 0) && (_state == 0))
     {
-        if(do_item(player)) // do our items
+        if(do_item(player))
             return 1;
         _state = 1;
     }
 
-    if(RVA(0x33470).ptr<int(__cdecl*)(int)>()(player) == 0) // do original items
+    if(RVA(0x33470).ptr<int(__cdecl*)(int)>()(player) == 0)
     {
         _state = 0;
         return 0;
@@ -659,6 +851,62 @@ int __stdcall do_byakko_seed(uint16_t item_id)
     }
 }
 
+// Choice abilities
+// piggybacks off choice items by adding an extra condition to the item check
+__declspec(naked)
+int __stdcall do_choice_check(uint16_t item_id)
+{
+    BattleState *state;
+    __asm
+    {
+        push ebp
+        mov ebp, esp
+        sub esp, __LOCAL_SIZE
+        mov state, ebx
+    }
+
+    int result;
+    {
+        if(((uint)state->active_ability == g_id_choice_focus) || ((uint)state->active_ability == g_id_choice_spread))
+            result = 1;
+        else if(has_held_item(state, item_id))
+            result = 1;
+        else
+            result = 0;
+    }
+
+    __asm
+    {
+        mov eax, result
+        mov ebx, state // ebx preserved across call
+        mov esp, ebp
+        pop ebp
+        ret 4
+    }
+}
+
+void __fastcall do_choice_msg(const char **ptr)
+{
+    auto state = get_battle_state(0);
+    if(((uint)state->active_ability == g_id_choice_focus) || ((uint)state->active_ability == g_id_choice_spread))
+    {
+        *ptr = "A choice ability";
+    }
+}
+
+__declspec(naked)
+void _do_choice_msg()
+{
+    __asm
+    {
+        pushad
+        lea ecx, [esp + 0x30]
+        call do_choice_msg
+        popad
+        jmp g_sprintf_addr
+    }
+}
+
 // NOTE: giant bit functions as *recoil*
 // as such it targets the current player rather than
 // the opponent
@@ -690,11 +938,12 @@ static int do_giant_bit(int player)
     case 1:
     {
         auto name = std::string(state->active_nickname);
+        bool english = tpdp_eng_translation();
         if(player != 0)
-            name = "Enemy " + name;
-        if(set_battle_text(name + " took damage from the\\nGiant Bit!") != 1)
+            name = (english ? "Enemy " : "相手の　") + name;
+        if(set_battle_text(name + (english ? " took damage from the\\nGiant Bit!" : "は　大型ビットの\\n打ち返しで　ダメージを　受けた！")) != 1)
         {
-            if(++_frames > 60)
+            if(++_frames > get_game_fps())
             {
                 _frames = 0;
                 _state = 0;
@@ -790,6 +1039,7 @@ static int do_resheal(int player)
     auto otherstate = get_battle_state(!player);
     static int _state = 0;
     static int _frames = 0;
+    static bool weak = false;
 
     if(otherstate->active_puppet == nullptr)
     {
@@ -809,11 +1059,11 @@ static int do_resheal(int player)
         if((otherpuppet.hp != 0) && (otherpuppet.hp < max_hp) && (state->dmg_dealt > 0) && (mul < 1.0) && (mul > 0.0))
         {
             auto tstate = get_terrain_state();
-            bool do_heal = true;
+            weak = false;
             for(auto i : otherpuppet.status_effects)
                 if((i == STATUS_WEAK) || (i == STATUS_HVYWEAK))
-                    do_heal = false;
-            if(do_heal)
+                    weak = true;
+            if(!weak)
             {
                 if(tstate->terrain_type == TERRAIN_SUZAKU)
                     otherstate->active_puppet->hp = (ushort)std::max((double)otherpuppet.hp - std::max(max_hp * g_mod_resheal * 0.5, 1.0), 0.0);
@@ -828,24 +1078,32 @@ static int do_resheal(int player)
         return 0;
 
     case 1:
-        if(do_heal_anim() == 0)
+        if(weak || (do_heal_anim() == 0))
             _state = 2;
         return 1;
 
     case 2:
     {
-        if(state->num_attacks > 0)
+        if(weak || (state->num_attacks > 0))
         {
             _frames = 0;
             _state = 0;
             return 0;
         }
+        constexpr auto enheal = " recovered HP with\\nAbsorber!";
+        constexpr auto jpheal = "は　アブソーバーで\\n体力を　回復した！";
+        constexpr auto endrain = " has lost HP due to Suzaku!";
+        constexpr auto jpdrain = "は 朱雀に\\n体力を 奪われた……";
         auto name = std::string(otherstate->active_nickname);
+        bool english = tpdp_eng_translation();
+        bool drain = get_terrain_state()->terrain_type == TERRAIN_SUZAKU;
+        auto enmsg = drain ? endrain : enheal;
+        auto jpmsg = drain ? jpdrain : jpheal;
         if(player == 0)
-            name = "Enemy " + name;
-        if(set_battle_text(name + " recovered HP with\\nAbsorber!") != 1)
+            name = (english ? "Enemy " : "相手の　") + name;
+        if(set_battle_text(name + (english ? enmsg : jpmsg)) != 1)
         {
-            if(++_frames > 60)
+            if(++_frames > get_game_fps())
             {
                 _frames = 0;
                 _state = 0;
@@ -887,7 +1145,7 @@ static int do_anti_status(int player)
     case 2:
         if(set_battle_text("The skill seems to have no effect...") != 1)
         {
-            if(++_frames > 60)
+            if(++_frames > get_game_fps())
             {
                 _frames = 0;
                 _state = 0;
@@ -899,6 +1157,210 @@ static int do_anti_status(int player)
     default:
         _state = 0;
         _frames = 0;
+        return 0;
+    }
+}
+
+int do_form_change(int player, int pid, int style, bool switchin)
+{
+    static auto _state = 0;
+    static auto _frames = 0;
+    auto state = get_battle_state(player);
+    auto puppet = decrypt_puppet(state->active_puppet);
+
+    int active_index = 0;
+    auto bdata = &get_battle_data()[player];
+    for(auto i = 0; i < 6; ++i)
+    {
+        if(&bdata->puppets[i] == state->active_puppet)
+        {
+            active_index = i;
+            break;
+        }
+    }
+
+    switch(_state)
+    {
+    case 0:
+        //state->field_0x4e = 0x00;
+        if(state->active_ability != (short)g_id_form_change) // wrong ability
+            return 0;
+        if(switchin && !g_form_changes[player][active_index]) // not transformed yet
+            return 0;
+        else if(!switchin && g_form_changes[player][active_index]) // already transformed
+            return 0;
+        if((puppet.puppet_id != g_id_form_base) || (puppet.style_index != g_id_form_base_style)) // wrong puppet
+            return 0;
+        if(puppet.hp < 1) // ded
+            return 0;
+
+        {
+            // don't bother transforming if the opponent has no puppets left
+            bool keep_going = false;
+            for(auto& p : get_battle_data()[!player].puppets)
+            {
+                if((p.puppet_id > 0) && (p.hp > 0))
+                {
+                    keep_going = true;
+                    break;
+                }
+            }
+            if(!keep_going)
+                return 0;
+        }
+
+        reset_ability_activation(player);
+        _state = 1;
+        return 1;
+
+    case 1:
+        if(show_ability_activation(player) == 0)
+        {
+            reset_ability_activation(player);
+            _state = 2;
+        }
+        return 1;
+
+    case 2:
+        state->field_0x4e += 0x10;
+        if(state->field_0x4e >= 0xff)
+        {
+            auto& data = get_puppet_data()[pid];
+            state->field_0x4e = 0xff;
+            _state = 3;
+            state->active_puppet_id = (ushort)pid;
+            //state->field_0x79 = (undefined)style;
+            state->active_style_index = (byte)style;
+            state->active_type1 = data.styles[style].element1;
+            state->active_type2 = data.styles[style].element2;
+            auto newpuppet = puppet;
+            newpuppet.puppet_id = (ushort)pid;
+            newpuppet.style_index = (byte)style;
+            for(auto i = 0; i < 6; ++i)
+                state->puppet_stats[i] = (ushort)calculate_stat(i, &newpuppet);
+            g_form_changes[player][active_index] = true;
+        }
+        return 1;
+
+    case 3:
+        state->field_0x4e -= 0x10;
+        if(state->field_0x4e <= 0x00)
+        {
+            state->field_0x4e = 0x00;
+            _state = 4;
+            if(!switchin)
+            {
+                state->active_puppet->hp = (ushort)calculate_stat(STAT_HP, &puppet);
+                reset_heal_anim(player);
+            }
+        }
+        return 1;
+
+    case 4:
+        if(switchin || (do_heal_anim() == 0))
+        {
+            _state = 5;
+            clear_battle_text();
+        }
+        return 1;
+
+    case 5:
+    {
+        auto name = std::string(state->active_nickname);
+        bool english = tpdp_eng_translation();
+        if(player != 0)
+            name = (english ? "Enemy " : "相手の　") + name;
+        if(set_battle_text(name + (english ? " has changed appearance!" : "は 姿が変わった！")) != 1)
+        {
+            if(++_frames > get_game_fps())
+            {
+                _frames = 0;
+                _state = 0;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    default:
+        _state = 0;
+        _frames = 0;
+        return 0;
+        break;
+    }
+}
+
+static int do_morale(int player)
+{
+    static auto _state = 0;
+
+    switch(_state)
+    {
+    case 0:
+        reset_stat_mod();
+        _state = 1;
+        return 1;
+
+    case 1:
+        if(apply_stat_mod(STAT_SPATK, 1, player) == 0)
+        {
+            _state = 0;
+            return 0;
+        }
+        return 1;
+
+    default:
+        _state = 0;
+        return 0;
+    }
+}
+
+static int do_curse(int player)
+{
+    static auto _state = 0;
+    static auto _frames = 0;
+    auto state = get_battle_state(player);
+
+    switch(_state)
+    {
+    case 0:
+        if((state->ruinous_turns > 0) || (get_rng(99) >= 30))
+            return 0;
+
+        state->ruinous_turns = 4;
+        reset_ability_activation(!player);
+        _state = 1;
+        return 1;
+
+    case 1:
+        if(show_ability_activation(!player) == 0)
+        {
+            clear_battle_text();
+            _state = 2;
+        }
+        return 1;
+
+    case 2:
+    {
+        auto name = std::string(state->active_nickname);
+        bool english = tpdp_eng_translation();
+        if(player != 0)
+            name = (english ? "Enemy " : "相手の　") + name;
+        auto msg = name + (english ? " has been cursed!" : " は呪われてしまった！");
+        if(set_battle_text(msg.c_str()) != 1)
+        {
+            if(++_frames > get_game_fps())
+            {
+                _state = 0;
+                _frames = 0;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    default:
+        _state = 0;
         return 0;
     }
 }
@@ -940,6 +1402,24 @@ static int skill_dispatch(int player, uint16_t effect_id, int effect_chance)
 
     case 3:
         if(has_held_item(otherstate, g_id_resheal) && can_use_items(otherstate) && (skilldata.type != SKILL_TYPE_STATUS) && (do_resheal(player) != 0))
+            return 1;
+        _state = 4;
+        return 1;
+
+    case 4:
+        if((state->active_ability == (short)g_id_form_change) && (state->dmg_dealt > 0) && (otherstate->active_puppet->hp <= 0) && (do_form_change(player, g_id_form_target, g_id_form_target_style, false) != 0))
+            return 1;
+        _state = 5;
+        return 1;
+
+    case 5:
+        if((state->active_ability == (short)g_id_morale) && (state->dmg_dealt > 0) && (otherstate->active_puppet->hp <= 0) && (do_morale(player) != 0))
+            return 1;
+        _state = 6;
+        return 1;
+
+    case 6:
+        if((otherstate->active_ability == (short)g_id_curse) && (state->dmg_dealt > 0) && (state->active_puppet->hp > 0) && (do_curse(player) != 0))
             return 1;
         _state = 0;
         return 0;
@@ -1001,20 +1481,21 @@ static void patch_byakko_seed()
 // fix bag auto sort cause it doesn't recognize new hold2 items
 static void do_bag_sort(unsigned int pocket)
 {
-    //only the hold2 pocket, delegate rest to original sorter function
+    //only the hold2 and key items pockets, delegate rest to original sorter function
     auto func = RVA(0x17c540).ptr<void(__cdecl*)(unsigned int)>();
-    if(pocket != 3)
+    if((pocket != 3) && (pocket != 6))
         return func(pocket);
 
     // collect and sort unique IDs from pocket
+    const auto sz = (pocket == 3) ? 0x80u : 0x20u;
+    const auto pocketbuf = (pocket == 3) ? RVA(0xD7C147).ptr<uint16_t*>() : RVA(0xD7C3C7).ptr<uint16_t*>();
     std::set<uint16_t> ids;
-    auto pocketbuf = RVA(0xD7C147).ptr<uint16_t*>();
-    for(auto i = 0; i < 0x80u; ++i)
+    for(auto i = 0u; i < sz; ++i)
         if(pocketbuf[i] != 0)
             ids.insert(pocketbuf[i]);
 
     // clear pocket
-    memset(pocketbuf, 0, 0x80u * sizeof(uint16_t));
+    memset(pocketbuf, 0, sz * sizeof(uint16_t));
 
     // fill pocket with sorted list
     auto i = 0;
@@ -1039,6 +1520,233 @@ static void do_exp_yield()
 }
 */
 
+// override the games update checker to avoid
+// "couldn't check for newest version" errors
+static double __cdecl get_newest_version()
+{
+    return 1.103; // yes it's a fucking float
+}
+
+#if 0
+__declspec(naked)
+void do_music_hack()
+{
+    static uint32_t loop_pos = 0;
+    static uint32_t index = 0;
+
+    __asm
+    {
+        jnc nojmp
+        jmp g_music_return_addr
+        nojmp:
+        pushad
+        pushfd
+        push ebp
+        mov ebp, esp
+        sub esp, __LOCAL_SIZE
+        mov loop_pos, ecx
+        mov index, eax
+    }
+
+    {
+        auto newindex = index - 0x6b;
+        void *loop_buf = RVA(0x6fd27b8);
+        void *handle_buf = RVA(0x9956D0);
+        auto loop_diff = (uintptr_t)g_music_loop_buf.get() - (uintptr_t)loop_buf;
+        auto handle_diff = (uintptr_t)g_music_handle_buf.get() - (uintptr_t)handle_buf;
+        if((loop_diff % 4) != 0)
+            log_error(L"Music loop buffer misaligned!");
+        if((handle_diff % 4) != 0)
+            log_error(L"Music handle buffer misaligned!");
+        if(newindex <= 5)
+        {
+            index = (handle_diff / 4u) + newindex;
+            loop_pos = g_music_loop_buf[newindex];
+        }
+        else
+        {
+            index = 0;
+            loop_pos = 0;
+        }
+    }
+
+    __asm
+    {
+        mov esp, ebp
+        pop ebp
+        popfd
+        popad
+        mov ecx, loop_pos
+        mov eax, index
+        jmp g_music_hackreturn_addr
+    }
+}
+#endif
+
+static uint32_t load_music_file(uint32_t *outptr, int unkint, const char *filepath)
+{
+    void *func = RVA(0x1b24e0);
+    uint32_t retval = 0;
+
+    __asm
+    {
+        push unkint
+        push outptr
+        mov ebx, filepath
+        call func
+        add esp, 8
+        mov retval, eax
+    }
+
+    return retval;
+}
+
+static uint32_t load_music_file(uint32_t *outptr, int unkint, const std::string& filepath)
+{
+    return load_music_file(outptr, unkint, filepath.c_str());
+}
+
+static int set_music_loop(uint32_t loop_pos, uint32_t handle)
+{
+    auto func = RVA(0x20c860).ptr<int(__cdecl*)(uint32_t, uint32_t)>();
+    return func(loop_pos, handle);
+}
+
+static void load_extra_music()
+{
+    auto bufsz = 256u;
+    g_music_handle_buf = std::make_unique<uint32_t[]>(bufsz);
+    g_music_loop_buf = std::make_unique<uint32_t[]>(bufsz);
+    memset(g_music_handle_buf.get(), 0, sizeof(uint32_t) * bufsz);
+    memset(g_music_loop_buf.get(), 0, sizeof(uint32_t) * bufsz);
+
+    libtpdp::Archive arc;
+    try
+    {
+        arc.open(L"dat\\gn_dat4.arc");
+    }
+    catch(libtpdp::ArcError ex)
+    {
+        LOG_ERROR() << L"Could not open gn_dat4.arc: " << ex.what();
+        return;
+    }
+
+    auto csvfile = arc.get_file("bgm\\BgmData.csv");
+    if(!csvfile)
+    {
+        LOG_ERROR() << L"Could not read BgmData.csv!";
+        return;
+    }
+
+    libtpdp::CSVFile csv;
+    if(!csv.parse(csvfile.data(), csvfile.size()))
+    {
+        LOG_ERROR() << L"Could not parse BgmData.csv!";
+        return;
+    }
+
+    auto count = 0;
+    for(auto& line : csv)
+    {
+        if(line.size() < 4)
+            continue;
+
+        auto sid = 0u;
+        auto sample = 0u;
+        try
+        {
+            sid = std::stoul(line[0]);
+            sample = std::stoul(line[3]);
+        }
+        catch(...)
+        {
+            continue;
+        }
+
+        if((sid >= 0x6bu) && (sid < 256u))
+        {
+            auto filename = line[1] + L".ogg";
+            auto path = utf_narrow(L"dat\\gn_dat4\\bgm\\" + filename);
+            load_music_file(&g_music_handle_buf[sid], 3, path);
+            set_music_loop(sample, g_music_handle_buf[sid]);
+            ++count;
+        }
+    }
+
+    LOG_DEBUG() << L"Loaded " << count << L" extra songs";
+
+    void *orig_loop_buf = RVA(0x6fd27b8);
+    void *orig_handle_buf = RVA(0x9956D0);
+
+    auto newbuf = g_music_handle_buf.get();
+    scan_and_replace_range(&orig_handle_buf, &newbuf, 4, RVA(0x17da10), 0x552);
+    newbuf = g_music_loop_buf.get();
+    scan_and_replace_range(&orig_loop_buf, &newbuf, 4, RVA(0x17da10), 0x552);
+
+    // instructions that cap music id
+    // address of imm8 byte of cmp reg, 0x6b
+    uintptr_t rvas[] = {
+        //0x17cf82,
+        //0x17d49a,
+        //0x17d853,
+        //0x17d8af,
+        0x17dc5e,
+        //0x17e0cd,
+        //0x17e158
+    };
+
+    auto newcap = 0xffu;
+    for(auto i : rvas)
+        patch_memory(RVA(i), &newcap, 1);
+}
+
+static void do_music_init()
+{
+    std::call_once(g_music_init, &load_extra_music);
+
+    auto func = RVA(0x17d3e0).ptr<VoidCall>();
+    func();
+
+    void *orig_loop_buf = RVA(0x6fd27b8);
+    void *orig_handle_buf = RVA(0x9956D0);
+    memcpy(g_music_handle_buf.get(), orig_handle_buf, sizeof(uint32_t) * 0x6b);
+    memcpy(g_music_loop_buf.get(), orig_loop_buf, sizeof(uint32_t) * 0x6b);
+}
+
+static void patch_bgm_limit()
+{
+    patch_call(RVA(0x1afb14), &do_music_init);
+    //patch_jump(RVA(0x17dc5f), &do_music_hack);
+    //g_music_return_addr = RVA(0x17dc65);
+    //g_music_hackreturn_addr = RVA(0x17dc6c);
+}
+
+static void patch_network_addrs(uint32_t ip, uint32_t port)
+{
+    patch_memory(RVA(0x189969 + 6), &ip, sizeof(uint32_t));
+    patch_memory(RVA(0x189979 + 1), &port, sizeof(uint32_t));
+
+    auto url = g_website_url.c_str();
+    void *ptr = RVA(0x42d300);
+    scan_and_replace(&ptr, &url, sizeof(void*));
+    patch_memory(RVA(0x1886b2 + 1), &url, sizeof(void*));
+}
+
+static void patch_miracle()
+{
+    uint8_t b = 0;
+    patch_memory(RVA(0x2e409 + 2), &b, sizeof(b));
+}
+
+static void patch_catch_rate(uint8_t lvl_factor)
+{
+    uint8_t code[] = {
+        0x6b, 0xd0, lvl_factor, // imul edx, eax, imm8
+        0xeb, 0x04              // jmp rel8off 4
+    };
+    patch_memory(RVA(0xcea4), code, sizeof(code));
+}
+
 // initialization
 void init_misc_hacks()
 {
@@ -1050,19 +1758,54 @@ void init_misc_hacks()
     scan_and_replace_call(RVA(0xa850), &do_battle_stats);
     scan_and_replace_call(RVA(0x202f0), &do_weather_msg);
     scan_and_replace_call(RVA(0x20590), &do_terrain_msg);
+    scan_and_replace_call(RVA(0x1bf70), &do_battlestate_reset);
+
+    // bgm limit
+    patch_bgm_limit();
 
     // unused stuff you can enable if you like
-    //scan_and_replace_call(RVA(0x1bf70), &do_battlestate_reset);
     //patch_call(RVA(0x1c714), &do_exp_yield);
 
     if(IniFile::global.get_bool("general", "override_bag_sort", true))
         scan_and_replace_call(RVA(0x17c540), &do_bag_sort);
 
+    if(IniFile::global.get_bool("general", "disable_update_check"))
+        patch_call(RVA(0x17e409), &get_newest_version);
+
     // change alt-color text in the costume shop
     if(tpdp_eng_translation())
         patch_memory(RVA(0x4335e8), "Alternate", 10);
     else
-        patch_memory(RVA(0x4335e8), "\x83\x58\x83\x79\x83\x56\x83\x83\x83\x8B", 11);
+        patch_memory(RVA(0x4335e8), "スペシャル", 11);
+
+    // patch matchmaking and website addresses
+    g_website_url = IniFile::global["network"]["website_addr"];
+    if(g_website_url.empty())
+        g_website_url = "www.gensou-suwako.com";
+    std::string ipstr = IniFile::global["network"]["server_addr"];
+    if(ipstr.empty())
+        ipstr = "160.16.225.5";
+    auto ip = hostname_to_ipv4(ipstr);
+    auto port = IniFile::global.get_uint("network", "server_port", 16390);
+    patch_network_addrs(ip, port);
+
+    // miracle reprisal
+    g_patch_miracle = IniFile::global.get_bool("skills", "patch_miracle");
+    if(g_patch_miracle)
+        patch_miracle();
+
+    // catch rate
+    auto lvl_factor = IniFile::global.get_uint("general", "catch_rate_lvl_factor");
+    if(lvl_factor != ID_NONE)
+        patch_catch_rate((uint8_t)lvl_factor);
+
+    // choice abilities
+    patch_call(RVA(0x0b349), &do_choice_check);
+    patch_call(RVA(0x183db), &do_choice_check);
+    patch_call(RVA(0x18729), &do_choice_check);
+    patch_call(RVA(0x2cb3e), &do_choice_check);
+    patch_call(RVA(0x1d965), &_do_choice_msg);
+    g_sprintf_addr = RVA(0x2f0c26);
 
     // config item IDs
     g_id_boots = IniFile::global.get_uint("items", "id_boots");
@@ -1095,20 +1838,50 @@ void init_misc_hacks()
     g_id_empowered = IniFile::global.get_uint("abilities", "id_en_abl");
     g_id_drain_abl = IniFile::global.get_uint("abilities", "id_drain_abl");
     g_id_calm_traveler = IniFile::global.get_uint("abilities", "id_calm_traveler");
+    g_id_form_change = IniFile::global.get_uint("abilities", "id_form_change");
+    g_id_form_target = IniFile::global.get_uint("abilities", "id_form_target");
+    g_id_form_target_style = IniFile::global.get_uint("abilities", "id_form_target_style");
+    g_id_form_base = IniFile::global.get_uint("abilities", "id_form_base");
+    g_id_form_base_style = IniFile::global.get_uint("abilities", "id_form_base_style");
+    g_id_morale = IniFile::global.get_uint("abilities", "id_morale");
+    g_id_curse = IniFile::global.get_uint("abilities", "id_curse");
+    g_id_merciless = IniFile::global.get_uint("abilities", "id_merciless");
+    g_id_choice_focus = IniFile::global.get_uint("abilities", "id_choice_focus");
+    g_id_choice_spread = IniFile::global.get_uint("abilities", "id_choice_spread");
 
     // config ability mods
     g_mod_class_abl = IniFile::global.get_double("abilities", "mod_class_abl", g_mod_class_abl);
     g_mod_drain_heal = IniFile::global.get_double("abilities", "mod_drain_heal", g_mod_drain_heal);
     g_mod_drain_def = IniFile::global.get_double("abilities", "mod_drain_def", g_mod_drain_def);
     g_mod_calm_traveler = IniFile::global.get_double("abilities", "mod_calm_traveler", g_mod_calm_traveler);
+    g_mod_merciless = IniFile::global.get_double("abilities", "mod_merciless", g_mod_merciless);
+    g_mod_choice = IniFile::global.get_double("abilities", "mod_choice", g_mod_choice);
 
     // config skills
     g_id_blitzkrieg = IniFile::global.get_uint("skills", "effect_id_blitzkrieg");
     g_mod_blitzkrieg = IniFile::global.get_double("skills", "mod_blitzkrieg", g_mod_blitzkrieg);
+    g_id_future_skill = IniFile::global.get_uint("skills", "skill_id_future");
 
     if(g_id_boots != ID_NONE)
         patch_boots();
 
     if(g_id_byakko_seed != ID_NONE)
         patch_byakko_seed();
+
+    auto smile_chance = IniFile::global.get_uint("abilities", "strong_smile_chance");
+    auto dark_chance = IniFile::global.get_uint("abilities", "dark_force_chance");
+
+    // strong smile
+    if(smile_chance != ID_NONE)
+    {
+        auto chance = (uint8_t)smile_chance;
+        patch_memory(RVA(0x5d2e + 6u), &chance, 1);
+    }
+
+    // dark force
+    if(dark_chance != ID_NONE)
+    {
+        auto chance = (uint8_t)dark_chance;
+        patch_memory(RVA(0x5ce7 + 6u), &chance, 1);
+    }
 }

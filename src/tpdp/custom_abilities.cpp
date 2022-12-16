@@ -164,6 +164,9 @@ static bool do_ability(int player)
             }
         }
 
+        if(ability == g_id_form_change)
+            result = do_form_change(player, g_id_form_target, g_id_form_target_style, true) != 0;
+
         if(ability == g_id_idola)
             result = do_idola(_state, player);
         if(ability == g_id_fascination)

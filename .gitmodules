@@ -1,0 +1,3 @@
+[submodule "deps/TPDP-Dev-Tools"]
+	path = deps/TPDP-Dev-Tools
+	url = https://github.com/php42/TPDP-Dev-Tools.git

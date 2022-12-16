@@ -41,4 +41,5 @@ HOOKAPI bool patch_jump(void *mem, const void *dest_addr);
 
 // careful with these
 HOOKAPI void scan_and_replace(const void *orig_mem, const void *new_mem, std::size_t sz);
+HOOKAPI void scan_and_replace_range(const void *orig_mem, const void *new_mem, std::size_t sz, void *range_start, std::size_t range_len);
 HOOKAPI void scan_and_replace_call(const void *orig_addr, const void *new_addr, bool patch_jumps = false);

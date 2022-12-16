@@ -3,3 +3,5 @@ Debug/*
 Release/*
 TPDPHook-Extended/Debug/*
 TPDPHook-Extended/Release/*
+build/*
+bin/*

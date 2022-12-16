@@ -89,6 +89,27 @@ void scan_and_replace(const void *orig_mem, const void *new_mem, std::size_t sz)
     LOG_TRACE() << L"Patched " << count << " blocks of size: " << sz;
 }
 
+void scan_and_replace_range(const void *orig_mem, const void *new_mem, std::size_t sz, void *range_start, std::size_t range_len)
+{
+    auto code = (uint8_t*)range_start;
+    auto count = 0;
+
+    std::size_t i = 0;
+    while(i < range_len) // loop the games code section
+    {
+        if(memcmp(&code[i], orig_mem, sz) == 0)
+        {
+            patch_memory(&code[i], new_mem, sz);
+            ++count;
+            i += sz;
+            continue;
+        }
+        ++i;
+    }
+
+    LOG_TRACE() << L"Patched " << count << " blocks of size: " << sz;
+}
+
 // only handles 4-byte displacements
 // also technically unsafe since it doesn't actually disassemble the code
 // so collisions/false positives are possible but unlikely
