@@ -89,7 +89,7 @@ static bool g_patch_miracle = false;
 bool g_form_changes[2][6]{};
 
 static std::unique_ptr<uint32_t[]> g_music_handle_buf;
-static std::unique_ptr<uint32_t[]> g_music_loop_buf;
+static std::unique_ptr<uint8_t[]> g_music_loop_buf;
 
 std::once_flag g_music_init;
 
@@ -714,6 +714,83 @@ void do_mine_trap()
         jmp jmpaddr
     }
 }
+
+// This patches into the jump table for the "state machine"
+// that controls most of the battle mechanics.
+// Largely untested, enable it by uncommenting the corresponding
+// line in init_misc_hacks() below.
+/*
+bool on_battle_state(BattleState *state, uint32_t index)
+{
+    static int frames = 0;
+    if(index == 1)
+    {
+        if(++frames >= 120)
+        {
+            frames = 0;
+            return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+__declspec(naked)
+void do_battle_state()
+{
+    uint32_t index;
+    BattleState *state;
+    __asm
+    {
+        pushad
+        pushfd
+        push ebp
+        mov ebp, esp
+        sub esp, __LOCAL_SIZE
+        mov index, eax
+        mov state, edi
+    }
+
+    static void *jmpaddr = nullptr;
+    static uint32_t last_index = 0xffffffff;
+    static bool do_hook = true;
+    {
+        jmpaddr = RVA(0x2ccd4).ptr<void**>()[index];
+        if(index != last_index)
+        {
+            do_hook = true;
+            last_index = index;
+        }
+
+        if(do_hook)
+            do_hook = on_battle_state(state, index);
+    }
+
+    if(do_hook)
+    {
+        __asm
+        {
+            mov esp, ebp
+            pop ebp
+            mov esp, ebp
+            pop ebp
+            mov eax, 1
+            ret
+        }
+    }
+    else
+    {
+        __asm
+        {
+            mov esp, ebp
+            pop ebp
+            popfd
+            popad
+            jmp jmpaddr
+        }
+    }
+}
+*/
 
 // add check for boots to stealth trap
 __declspec(naked)
@@ -1614,11 +1691,39 @@ static int set_music_loop(uint32_t loop_pos, uint32_t handle)
 
 static void load_extra_music()
 {
-    auto bufsz = 256u;
-    g_music_handle_buf = std::make_unique<uint32_t[]>(bufsz);
-    g_music_loop_buf = std::make_unique<uint32_t[]>(bufsz);
-    memset(g_music_handle_buf.get(), 0, sizeof(uint32_t) * bufsz);
-    memset(g_music_loop_buf.get(), 0, sizeof(uint32_t) * bufsz);
+    constexpr auto max_songs = 256u;
+    constexpr auto total_loop_sz = (max_songs * 0x1cu) + 0xd60u;
+    g_music_handle_buf = std::make_unique<uint32_t[]>(max_songs);
+    g_music_loop_buf = std::make_unique<uint8_t[]>(total_loop_sz);
+    memset(g_music_handle_buf.get(), 0, sizeof(uint32_t) * max_songs);
+    memset(g_music_loop_buf.get(), 0, total_loop_sz);
+
+    void *orig_loop_buf = RVA(0x6fd27b8);
+    void *orig_handle_buf = RVA(0x9956D0);
+
+    void *newbuf = g_music_handle_buf.get();
+    scan_and_replace(&orig_handle_buf, &newbuf, 4);
+    newbuf = &g_music_handle_buf[1];
+    orig_handle_buf = RVA(0x9956D4);
+    scan_and_replace(&orig_handle_buf, &newbuf, 4);
+    newbuf = g_music_loop_buf.get();
+    scan_and_replace(&orig_loop_buf, &newbuf, 4);
+
+    // instructions that cap music id
+    // address of imm8 byte of cmp reg, 0x6b
+    uintptr_t rvas[] = {
+        0x17cf82,
+        0x17d49a,
+        0x17d853,
+        0x17d8af,
+        0x17dc5e, // playback
+        0x17e0cd,
+        0x17e158
+    };
+
+    auto newcap = 0xffu;
+    for(auto i : rvas)
+        patch_memory(RVA(i), &newcap, 1);
 
     libtpdp::Archive arc;
     try
@@ -1674,43 +1779,20 @@ static void load_extra_music()
     }
 
     LOG_DEBUG() << L"Loaded " << count << L" extra songs";
-
-    void *orig_loop_buf = RVA(0x6fd27b8);
-    void *orig_handle_buf = RVA(0x9956D0);
-
-    auto newbuf = g_music_handle_buf.get();
-    scan_and_replace_range(&orig_handle_buf, &newbuf, 4, RVA(0x17da10), 0x552);
-    newbuf = g_music_loop_buf.get();
-    scan_and_replace_range(&orig_loop_buf, &newbuf, 4, RVA(0x17da10), 0x552);
-
-    // instructions that cap music id
-    // address of imm8 byte of cmp reg, 0x6b
-    uintptr_t rvas[] = {
-        //0x17cf82,
-        //0x17d49a,
-        //0x17d853,
-        //0x17d8af,
-        0x17dc5e,
-        //0x17e0cd,
-        //0x17e158
-    };
-
-    auto newcap = 0xffu;
-    for(auto i : rvas)
-        patch_memory(RVA(i), &newcap, 1);
 }
 
 static void do_music_init()
 {
-    std::call_once(g_music_init, &load_extra_music);
-
     auto func = RVA(0x17d3e0).ptr<VoidCall>();
     func();
+
+    std::call_once(g_music_init, &load_extra_music);
 
     void *orig_loop_buf = RVA(0x6fd27b8);
     void *orig_handle_buf = RVA(0x9956D0);
     memcpy(g_music_handle_buf.get(), orig_handle_buf, sizeof(uint32_t) * 0x6b);
     memcpy(g_music_loop_buf.get(), orig_loop_buf, sizeof(uint32_t) * 0x6b);
+    memcpy(g_music_loop_buf.get() + 0xd60u, RVA(0x6fd27b8 + 0xd60u), 0x6b * 0x1cu);
 }
 
 static void patch_bgm_limit()
@@ -1760,8 +1842,12 @@ void init_misc_hacks()
     scan_and_replace_call(RVA(0x20590), &do_terrain_msg);
     scan_and_replace_call(RVA(0x1bf70), &do_battlestate_reset);
 
+    // hook the main battle mechanic "state machine"
+    //patch_jump(RVA(0x293e7), &do_battle_state);
+
     // bgm limit
-    patch_bgm_limit();
+    if(IniFile::global.get_bool("general", "extra_music_hack"))
+        patch_bgm_limit();
 
     // unused stuff you can enable if you like
     //patch_call(RVA(0x1c714), &do_exp_yield);
