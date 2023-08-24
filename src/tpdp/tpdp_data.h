@@ -253,3 +253,6 @@ HOOKAPI int do_heal_anim();
 HOOKAPI void reset_heal_anim(int player); // call before calling do_heal_anim
 
 HOOKAPI void load_puppet_sprite(int puppet_id);
+
+// check if player has any living puppets remaining
+HOOKAPI bool has_live_puppets(int player);

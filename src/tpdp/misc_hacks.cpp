@@ -71,6 +71,7 @@ static auto g_id_curse = ID_NONE;
 static auto g_id_merciless = ID_NONE;
 static auto g_id_choice_focus = ID_NONE;
 static auto g_id_choice_spread = ID_NONE;
+static auto g_id_imposter = ID_NONE;
 
 // ability mods
 static auto g_mod_class_abl = 0.1;
@@ -1328,21 +1329,9 @@ int do_form_change(int player, int pid, int style, bool switchin)
         if(puppet.hp < 1) // ded
             return 0;
 
-        {
-            // don't bother transforming if the opponent has no puppets left
-            bool keep_going = false;
-            for(auto& puppet : get_battle_data()[!player].puppets)
-            {
-                auto p = decrypt_puppet(&puppet);
-                if((p.puppet_id > 0) && (p.hp > 0))
-                {
-                    keep_going = true;
-                    break;
-                }
-            }
-            if(!keep_going)
-                return 0;
-        }
+        // don't bother transforming if the opponent has no puppets left
+        if(!has_live_puppets(!player))
+            return 0;
 
         reset_ability_activation(player);
         _state = 1;
@@ -1406,6 +1395,97 @@ int do_form_change(int player, int pid, int style, bool switchin)
         if(player != 0)
             name = (english ? "Enemy " : "相手の　") + name;
         if(set_battle_text(name + (english ? " has changed appearance!" : "は 姿が変わった！")) != 1)
+        {
+            if(++_frames > get_game_fps())
+            {
+                _frames = 0;
+                _state = 0;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    default:
+        _state = 0;
+        _frames = 0;
+        return 0;
+        break;
+    }
+}
+
+int do_imposter(int player)
+{
+    static auto _state = 0;
+    static auto _frames = 0;
+    auto state = get_battle_state(player);
+    auto otherstate = get_battle_state(!player);
+    auto puppet = decrypt_puppet(state->active_puppet);
+
+    switch(_state)
+    {
+    case 0:
+        if(state->active_ability != (short)g_id_imposter) // wrong ability
+            return 0;
+        if(puppet.hp < 1) // ded
+            return 0;
+
+        // don't bother transforming if the opponent has no puppets left
+        if(!has_live_puppets(!player))
+            return 0;
+
+        reset_ability_activation(player);
+        _state = 1;
+        return 1;
+
+    case 1:
+        if(show_ability_activation(player) == 0)
+        {
+            reset_ability_activation(player);
+            _state = 2;
+        }
+        return 1;
+
+    case 2:
+        state->field_0x4e += 0x10;
+        if(state->field_0x4e >= 0xff)
+        {
+            state->field_0x4e = 0xff;
+            _state = 3;
+            state->active_puppet_id = otherstate->active_puppet_id;
+            //state->field_0x79 = (undefined)style;
+            state->active_style_index = otherstate->active_style_index;
+            state->active_type1 = otherstate->active_type1;
+            state->active_type2 = otherstate->active_type2;
+            state->active_ability = otherstate->active_ability;
+            for(auto i = 1; i < 6; ++i) // NOTE: change 'i = 1' to 'i = 0' to copy HP stat as well 
+                state->puppet_stats[i] = otherstate->puppet_stats[i];
+            for(auto i = 0; i < 4; ++i)
+            {
+                state->puppet_skills[i] = otherstate->puppet_skills[i];
+                state->puppet_sp[i] = otherstate->puppet_sp[i];
+            }
+        }
+        return 1;
+
+    case 3:
+        state->field_0x4e -= 0x10;
+        if(state->field_0x4e <= 0x00)
+        {
+            state->field_0x4e = 0x00;
+            _state = 4;
+            clear_battle_text();
+        }
+        return 1;
+
+    case 4:
+    {
+        auto name = std::string(state->active_nickname);
+        auto othername = std::string(otherstate->active_nickname);
+        bool english = tpdp_eng_translation();
+        if(player != 0)
+            name = (english ? "Enemy " : "相手の　") + name;
+        if(set_battle_text(name + (english ? " has copied " + othername + "!" : " は\\n" + othername + " に変わった！")) != 1)
         {
             if(++_frames > get_game_fps())
             {
@@ -1554,6 +1634,12 @@ static int skill_dispatch(int player, uint16_t effect_id, int effect_chance)
         return 1;
 
     case 6:
+        if((state->dmg_dealt > 0) && (otherstate->active_puppet->hp <= 0) && (do_imposter(player) != 0))
+            return 1;
+        _state = 7;
+        return 1;
+
+    case 7:
         if((otherstate->active_ability == (short)g_id_curse) && (state->dmg_dealt > 0) && (state->active_puppet->hp > 0) && (do_curse(player) != 0))
             return 1;
         _state = 0;
@@ -1995,6 +2081,7 @@ void init_misc_hacks()
     g_id_merciless = IniFile::global.get_uint("abilities", "id_merciless");
     g_id_choice_focus = IniFile::global.get_uint("abilities", "id_choice_focus");
     g_id_choice_spread = IniFile::global.get_uint("abilities", "id_choice_spread");
+    g_id_imposter = IniFile::global.get_uint("abilities", "id_imposter");
 
     // config ability mods
     g_mod_class_abl = IniFile::global.get_double("abilities", "mod_class_abl", g_mod_class_abl);
