@@ -460,7 +460,7 @@ void load_puppet_sprite(int puppet_id)
 
 bool has_live_puppets(int player)
 {
-    for(auto& puppet : get_battle_data()[!player].puppets)
+    for(auto& puppet : get_battle_data()[player].puppets)
     {
         auto p = decrypt_puppet(&puppet);
         if((p.puppet_id > 0) && (p.hp > 0))
