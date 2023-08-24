@@ -1331,8 +1331,9 @@ int do_form_change(int player, int pid, int style, bool switchin)
         {
             // don't bother transforming if the opponent has no puppets left
             bool keep_going = false;
-            for(auto& p : get_battle_data()[!player].puppets)
+            for(auto& puppet : get_battle_data()[!player].puppets)
             {
+                auto p = decrypt_puppet(&puppet);
                 if((p.puppet_id > 0) && (p.hp > 0))
                 {
                     keep_going = true;
