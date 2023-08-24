@@ -792,6 +792,63 @@ void do_battle_state()
 }
 */
 
+#if 0
+void on_event(uint32_t index)
+{
+    auto pnext = RVA(0x975e2c).ptr<uint32_t*>();
+
+    switch(index)
+    {
+    case 0x50:
+        log_fatal(L"Test event");
+        break;
+
+    default:
+        break;
+    }
+}
+
+__declspec(naked)
+void do_event()
+{
+    uint32_t index;
+    __asm
+    {
+        pushad
+        pushfd
+        push ebp
+        mov ebp, esp
+        sub esp, __LOCAL_SIZE
+        mov index, eax
+    }
+
+    static void *jmpaddr = nullptr;
+    {
+        if(index < 0x50)
+            jmpaddr = RVA(0x177348).ptr<void**>()[index];
+        else
+            jmpaddr = RVA(0x174210).ptr<void*>();
+        on_event(index);
+    }
+
+    __asm
+    {
+        mov esp, ebp
+        pop ebp
+        popfd
+        popad
+        jmp jmpaddr
+    }
+}
+
+void patch_event_table()
+{
+    patch_jump(RVA(0x1742b9), &do_event);
+    uint8_t max_evt = 0x52;
+    patch_memory(RVA(0x1742b0 + 2), &max_evt, 1);
+}
+#endif
+
 // add check for boots to stealth trap
 __declspec(naked)
 void do_stealth_trap()
@@ -1844,6 +1901,9 @@ void init_misc_hacks()
 
     // hook the main battle mechanic "state machine"
     //patch_jump(RVA(0x293e7), &do_battle_state);
+
+    // hook into event table
+    //patch_event_table();
 
     // bgm limit
     if(IniFile::global.get_bool("general", "extra_music_hack"))
