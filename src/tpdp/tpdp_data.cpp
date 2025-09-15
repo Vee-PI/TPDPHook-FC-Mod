@@ -161,11 +161,34 @@ BattleState *get_battle_state(int player)
 
 int do_weather_msg()
 {
-    auto func = RVA(0x202f0).ptr<int(*)(void)>();
-    auto result = func();
-    if(result == 0)
+    static auto _state = 0;
+    switch (_state)
+    {
+    case 0:
+    {
+        auto func = RVA(0x202f0).ptr<int(*)(void)>();
+        auto result = func();
+        if (result)
+            return result;
+        _state = 1;
+        return 1;
+    }
+
+    case 1:
         do_terrain_hook();
-    return result;
+        _state = 2;
+        return 1;
+
+    case 2:
+        if (do_possess())
+            return 1;
+        _state = 0;
+        return 0;
+
+    default:
+        _state = 0;
+        return 0;
+    }
 }
 
 void reset_weather_msg()
@@ -175,11 +198,34 @@ void reset_weather_msg()
 
 int do_terrain_msg()
 {
-    auto func = RVA(0x20590).ptr<int(*)(void)>();
-    auto result = func();
-    if(result == 0)
+    static auto _state = 0;
+    switch (_state)
+    {
+    case 0:
+    {
+        auto func = RVA(0x20590).ptr<int(*)(void)>();
+        auto result = func();
+        if (result)
+            return result;
+        _state = 1;
+        return 1;
+    }
+
+    case 1:
         do_terrain_hook();
-    return result;
+        _state = 2;
+        return 1;
+
+    case 2:
+        if (do_possess())
+            return 1;
+        _state = 0;
+        return 0;
+
+    default:
+        _state = 0;
+        return 0;
+    }
 }
 
 void reset_terrain_msg()

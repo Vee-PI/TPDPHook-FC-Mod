@@ -14,6 +14,8 @@
 #include "custom_skills.h"
 #include "misc_hacks.h"
 #include "custom_abilities.h"
+#include "savefile.h"
+#include "archive.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -113,6 +115,59 @@ static std::filesystem::path get_basegame_path()
     }
 
     return {};
+}
+
+//New event setup
+void patch_folders()
+{
+    libtpdp::Archive arc;
+    try
+    {
+        arc.open(L"dat\\gn_dat1.arc");
+    }
+    catch (libtpdp::ArcError ex)
+    {
+        LOG_ERROR() << L"Could not open gn_dat1.arc: " << ex.what();
+        return;
+    }
+
+    auto ef = arc.get_file("common\\EFile.bin");
+    if (!ef)
+    {
+        LOG_ERROR() << L"Could not read EFile.bin!";
+        return;
+    }
+
+    libtpdp::SaveFile sf;
+    if (!sf.open("save\\enbu_ap.sav", ef.data(), ef.size()))
+    {
+        LOG_ERROR() << L"Could not open save file!";
+        return;
+    }
+
+    if (sf.get_item_quantity(800) > 0)
+    {
+        auto bgm1 = "dat\\BgmData2.csv";
+        auto bgm2 = "%s\\BgmData2.csv";
+        auto bg = "%s\\locationBG2\\%s%d.png";
+        void* addr1 = RVA(0x44120c);
+        void* addr2 = RVA(0x44121c);
+        void* addr3 = RVA(0x43bc50);
+        scan_and_replace(&addr1, &bgm1, sizeof(void*));
+        scan_and_replace(&addr2, &bgm2, sizeof(void*));
+        scan_and_replace(&addr3, &bg, sizeof(void*));
+    }
+
+    IniFile ini("save\\extended.ini");
+    if (ini.get_bool("general", "unlock_puppets"))
+    {
+        auto dd1 = "%s\\DollData2.dbs";
+        auto dd2 = "%s\\%s\\DollData2.dbs";
+        void* addr1 = RVA(0x43aec4);
+        void* addr2 = RVA(0x4414a4);
+        scan_and_replace(&addr1, &dd1, sizeof(void*));
+        scan_and_replace(&addr2, &dd2, sizeof(void*));
+    }
 }
 
 // assign skill function to effect ID
@@ -426,13 +481,13 @@ extern "C" __declspec(dllexport) void tpdphook_early_init()
 
     patch_call(RVA(0x2f3cb5), &global_init);
 
-    if(IniFile::global.get_bool("general", "auto_repair_installpath"))
+    if (IniFile::global.get_bool("general", "auto_repair_installpath"))
     {
         check_installpath();
         patch_install_check();
     }
 
-    if(IniFile::global.get_bool("general", "force_jp_locale"))
+    if (IniFile::global.get_bool("general", "force_jp_locale"))
     {
         SetThreadLocale(MAKELCID(MAKELANGID(LANG_JAPANESE, SUBLANG_JAPANESE_JAPAN), SORT_DEFAULT));
         SetThreadUILanguage(MAKELANGID(LANG_JAPANESE, SUBLANG_JAPANESE_JAPAN));
@@ -446,18 +501,20 @@ extern "C" __declspec(dllexport) void tpdphook_early_init()
     }
 
     g_translated = (std::string(*RVA(0x1af5f2).ptr<const char**>()).find("Translation") != std::string::npos);
-    if(g_translated)
+    if (g_translated)
     {
         // translate base game missing message (only if using eng patch)
         auto msg = "Could not locate base game \"Touhou Puppet Dance Performance\"\r\n"
-                   "Shard of Dreams expansion cannot run without the base game installed.\r\n"
-                   "If the base game is already installed, try re-running the installer with japanese locale.";
+            "Shard of Dreams expansion cannot run without the base game installed.\r\n"
+            "If the base game is already installed, try re-running the installer with japanese locale.";
         patch_memory(RVA(0x11a8), &msg, 4);
     }
 
     g_dxhandle_limit = IniFile::global.get_uint("general", "dxhandle_limit_override");
-    if(g_dxhandle_limit != ID_NONE)
+    if (g_dxhandle_limit != ID_NONE)
         scan_and_replace_call(RVA(0x1f80d0), &dxhandlemgr_override);
+
+    patch_folders();
 }
 
 // called immediately in main()

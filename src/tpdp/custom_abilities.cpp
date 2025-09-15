@@ -145,19 +145,19 @@ static bool do_ability(int player)
             switch(ability)
             {
             case 450:
-                result = do_terrain_setter(_state, player, TERRAIN_SEIRYU);
+                result = do_terrain_setter(_state, player, TERRAIN_SEIRYU, WEATHER_NONE, 4);
                 break;
             case 451:
-                result = do_terrain_setter(_state, player, TERRAIN_SUZAKU);
+                result = do_terrain_setter(_state, player, TERRAIN_SUZAKU, WEATHER_NONE, 4);
                 break;
             case 452:
-                result = do_terrain_setter(_state, player, TERRAIN_BYAKKO);
+                result = do_terrain_setter(_state, player, TERRAIN_BYAKKO, WEATHER_NONE, 4);
                 break;
             case 453:
-                result = do_terrain_setter(_state, player, TERRAIN_GENBU);
+                result = do_terrain_setter(_state, player, TERRAIN_GENBU, WEATHER_NONE, 4);
                 break;
             case 454:
-                result = do_terrain_setter(_state, player, TERRAIN_KOHRYU);
+                result = do_terrain_setter(_state, player, TERRAIN_KOHRYU, WEATHER_NONE, 4);
                 break;
             default:
                 break;
@@ -166,6 +166,15 @@ static bool do_ability(int player)
 
         if(ability == g_id_form_change)
             result = do_form_change(player, g_id_form_target, g_id_form_target_style, true) != 0;
+
+        if (ability == g_id_possess)
+        {
+            auto tstate = get_terrain_state();
+            if (tstate->weather_type != WEATHER_DUSTSTORM)
+            {
+                result = do_form_change(player, g_id_possess_target, g_id_possess_target_style, false, true) != 0;
+            }
+        }
 
         if(ability == g_id_idola)
             result = do_idola(_state, player);

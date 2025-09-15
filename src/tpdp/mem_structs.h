@@ -239,8 +239,8 @@ struct BattleState {
     undefined field_0x182;
     undefined field_0x183;
     int turn_order;
-    undefined field_0x188;
-    undefined field_0x189;
+    undefined field_barrier_turns;
+    undefined field_protect_turns;
     undefined field_0x18a;
     undefined field_0x18b;
     undefined field_0x18c;

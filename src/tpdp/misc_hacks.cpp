@@ -8,12 +8,56 @@
 #include "custom_skills.h"
 #include "archive.h"
 #include "gamedata.h"
+#include "../textconvert.h"
 #include <cassert>
 #include <algorithm>
 #include <set>
 #include <memory>
 #include <mutex>
 #include <regex>
+#include <fstream>
+
+static const char* g_element_names_en[] = {
+    "None",
+    "Void",
+    "Fire",
+    "Water",
+    "Nature",
+    "Earth",
+    "Steel",
+    "Wind",
+    "Electric",
+    "Light",
+    "Dark",
+    "Nether",
+    "Poison",
+    "Fighting",
+    "Illusion",
+    "Sound",
+    "Dream",
+    "Warped",
+};
+static const char* g_element_names_jp[] = {
+    "None",
+    "無",
+    "炎",
+    "水",
+    "自然",
+    "大地",
+    "鋼鉄",
+    "風",
+    "雷",
+    "光",
+    "闇",
+    "冥",
+    "毒",
+    "闘",
+    "幻",
+    "音",
+    "夢",
+    "歪",
+};
+
 
 /*      HERE LIES SPICY JANK
  * This file contains unholy hackery
@@ -41,7 +85,7 @@ static auto g_id_seiryu_seed = ID_NONE;
 static auto g_id_byakko_seed = ID_NONE;
 static auto g_id_suzaku_seed = ID_NONE;
 static auto g_id_resheal = ID_NONE;
-static auto g_id_anti_status = ID_NONE;
+static auto g_id_feast = ID_NONE;
 
 // item mods
 static auto g_mod_wyrmprint_high = 1.4;
@@ -53,10 +97,12 @@ static auto g_mod_seiryu_seed = 4.0 / 3.0;
 static auto g_mod_suzaku_seed = 1.0 / 8.0;
 static auto g_mod_resheal = 1.0 / 8.0;
 static auto g_power_giant_bit = 120u;
+static auto g_mod_feast = 1.0 / 3.0;
 
 // ability IDs
 static auto g_id_stacking = ID_NONE;
 static auto g_id_light_wings = ID_NONE;
+static auto g_id_water_wings = ID_NONE;
 static auto g_id_astronomy = ID_NONE;
 static auto g_id_empowered = ID_NONE;
 static auto g_id_drain_abl = ID_NONE;
@@ -72,6 +118,18 @@ static auto g_id_merciless = ID_NONE;
 static auto g_id_choice_focus = ID_NONE;
 static auto g_id_choice_spread = ID_NONE;
 static auto g_id_imposter = ID_NONE;
+static auto g_id_anti_status = ID_NONE;
+static auto g_id_magic = ID_NONE;
+static auto g_id_warmup = ID_NONE;
+static auto g_id_challenge = ID_NONE;
+static auto g_id_sand_castle = ID_NONE;
+unsigned int g_id_possess = ID_NONE;
+unsigned int g_id_possess_target = ID_NONE;
+unsigned int g_id_possess_target_style = ID_NONE;
+static auto g_id_possess_base = ID_NONE;
+static auto g_id_possess_base_style = ID_NONE;
+static auto g_id_gradate = ID_NONE;
+
 
 // ability mods
 static auto g_mod_class_abl = 0.1;
@@ -80,14 +138,26 @@ static auto g_mod_drain_def = 0.8;
 static auto g_mod_calm_traveler = 2.0;
 static auto g_mod_merciless = 1.5;
 static auto g_mod_choice = 1.5;
+static auto g_mod_magic = 1.1;
+static auto g_mod_challenge = 1.2;
+static auto g_mod_sand_castle = 2.0;
 
 // skills
 static auto g_id_blitzkrieg = ID_NONE;
 static double g_mod_blitzkrieg = 2.0;
 static auto g_id_future_skill = ID_NONE;
 static bool g_patch_miracle = false;
+static bool g_macroburst_acc_boost = false;
+
+WishState g_wish_state[2];
 
 bool g_form_changes[2][6]{};
+
+std::string get_element_string(unsigned int type)
+{
+    bool english = tpdp_eng_translation();
+    return english ? g_element_names_en[type] : g_element_names_jp[type];
+}
 
 static std::unique_ptr<uint32_t[]> g_music_handle_buf;
 static std::unique_ptr<uint8_t[]> g_music_loop_buf;
@@ -163,6 +233,27 @@ void do_terrain_hook()
     }
 }
 
+int do_possess()
+{
+    for (auto i = 0; i < 2; ++i)
+    {
+        auto state = get_battle_state(i);
+        if ((uint)state->active_ability == g_id_possess) //ancient possession//
+        {
+            auto tstate = get_terrain_state();
+            if (tstate->weather_type != WEATHER_DUSTSTORM)
+            {
+                return do_form_change(i, g_id_possess_target, g_id_possess_target_style, false, true);
+            }
+            else if (tstate->weather_type == WEATHER_DUSTSTORM)
+            {
+                return do_form_change(i, g_id_possess_base, g_id_possess_base_style, false, true);
+            }
+        }
+    }
+    return 0;
+}
+
 // called when the battle state is reset
 // before a new battle begins
 void do_battlestate_reset()
@@ -180,6 +271,8 @@ void do_battlestate_reset()
     for(auto& i : g_future_turns)
         i = 0;
 
+    load_puppet_sprite(g_id_possess_target);
+
     auto bdata = get_battle_data();
     for(auto i = 0; i < 2; ++i) // load form change sprite if user present
     {
@@ -191,9 +284,18 @@ void do_battlestate_reset()
                 load_puppet_sprite(g_id_form_target);
                 goto stop;
             }
+            else if ((puppet.puppet_id == g_id_possess_base) && (puppet.style_index == g_id_possess_base_style))
+            {
+                load_puppet_sprite(g_id_possess_target);
+                goto stop;
+            }
         }
     }
 stop:
+
+    for (auto& wish : g_wish_state)
+        wish = {};
+
     return;
 }
 
@@ -260,7 +362,7 @@ uint do_dmg_calc(BattleState *state, BattleState *otherstate, int player, [[mayb
         dmg *= g_mod_seiryu_seed; // also Yggdrasil Seed
     }
 
-    if((uint)state->active_ability == g_id_merciless)
+    if (((uint)state->active_ability == g_id_merciless) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
     {
         for(auto status : otherpuppet.status_effects)
         {
@@ -271,6 +373,37 @@ uint do_dmg_calc(BattleState *state, BattleState *otherstate, int player, [[mayb
             }
         }
     }
+    else if (((uint)state->active_ability == g_id_astronomy) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
+    {
+        auto data = get_skill_data();
+        if (data[skill_id].classification == SKILL_CLASS_BU)
+            dmg *= g_mod_class_abl; //astronomy atk boost
+    }
+
+    else if (((uint)state->active_ability == g_id_empowered) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
+    {
+        auto data = get_skill_data();
+        if (data[skill_id].classification == SKILL_CLASS_EN)
+            dmg *= g_mod_class_abl; //empowered atk boost
+    }
+
+    else if (((uint)state->active_ability == g_id_magic) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
+    {
+        auto data = get_skill_data();
+        if (data[skill_id].power >= 120)
+            dmg *= g_mod_magic; //magic boost
+    }
+
+   /* auto data = get_skill_data();
+    if (g_patch_miracle && (data->effect_id == 120))
+    {
+        auto otherstate.
+        auto boost = 0;
+        for (auto stat : otherstate->stat_modifiers)
+            if (stat > 0)
+        damage *= num_stat_boosts + 1;
+    } 
+    miracle reprisal, come back when you're stronger */
 
     if((int)dmg < 0)
     {
@@ -336,6 +469,9 @@ int __stdcall do_battle_stats(BattleState *state, byte stat_index, bool crit, bo
         break;
 
     case STAT_FODEF:
+        if (((uint)state->active_ability == g_id_sand_castle) && (terrain_state->weather_type == WEATHER_DUSTSTORM))
+            result *= g_mod_sand_castle; // Silent Running
+
     case STAT_SPDEF:
         if((uint)state->active_ability == g_id_drain_abl) // Cursed Being def drop
             result *= g_mod_drain_def;
@@ -357,6 +493,21 @@ int __stdcall do_battle_stats(BattleState *state, byte stat_index, bool crit, bo
         return 1;
     return (int)result;
 }
+    /*else if (((uint)state->active_ability == g_id_astronomy) && (otherstate->active_ability != 335) && (terrain_state->terrain_type != TERRAIN_KOHRYU) && (data->classification == SKILL_CLASS_BU))
+    {
+        auto power = (double)data->power;
+        data->power = (byte)std::clamp(power + (power * g_mod_class_abl), 0.0, 255.0); // Astronomy
+    }
+    else if(((uint)state->active_ability == g_id_empowered) && (otherstate->active_ability != 335) && (terrain_state->terrain_type != TERRAIN_KOHRYU) && (data->classification == SKILL_CLASS_EN))
+    {
+        auto power = (double)data->power;
+        data->power = (byte)std::clamp(power + (power * g_mod_class_abl), 0.0, 255.0); // Empowered
+    }
+    else if (((uint)state->active_ability == g_id_magic) && (otherstate->active_ability != 335) && (terrain_state->terrain_type != TERRAIN_KOHRYU) && (data->power >= 120))
+    {
+        auto power = (double)data->power;
+        data->power = (byte)std::clamp(power + (power * g_mod_magic), 0.0, 255.0);
+    }*/
 
 // override type/power/prio/etc changes
 SkillData *__fastcall do_adjusted_skill_data(int player, ushort skill_id)
@@ -368,7 +519,7 @@ SkillData *__fastcall do_adjusted_skill_data(int player, ushort skill_id)
     auto terrain_state = get_terrain_state();
     auto curskill = (skill_id != 0) ? skill_id : state->active_skill_id;
     const auto& basedata = get_skill_data()[curskill];
-    if((data->effect_id == g_id_blitzkrieg) && ((state->turn_order == 0) || (otherstate->num_turns == 0)))
+    if ((data->effect_id == g_id_blitzkrieg) && ((state->turn_order == 0) || (otherstate->num_turns == 0)))
         data->power = (byte)std::clamp((double)data->power * g_mod_blitzkrieg, 0.0, 255.0);
 
     if(((uint)state->active_ability == g_id_light_wings) && (basedata.element == ELEMENT_LIGHT))
@@ -376,23 +527,18 @@ SkillData *__fastcall do_adjusted_skill_data(int player, ushort skill_id)
         if((data->priority < 6) && ((uint)otherstate->active_ability != 341)) // Grand Opening
             data->priority += 1;
     }
-    else if(((uint)state->active_ability == g_id_astronomy) && (otherstate->active_ability != 335) && (data->classification == SKILL_CLASS_BU))
+    else if (((uint)state->active_ability == g_id_water_wings) && (basedata.element == ELEMENT_WATER))
     {
-        auto power = (double)data->power;
-        data->power = (byte)std::clamp(power + (power * g_mod_class_abl), 0.0, 255.0); // Astronomy
-    }
-    else if(((uint)state->active_ability == g_id_empowered) && (otherstate->active_ability != 335) && (data->classification == SKILL_CLASS_EN))
-    {
-        auto power = (double)data->power;
-        data->power = (byte)std::clamp(power + (power * g_mod_class_abl), 0.0, 255.0); // Empowered
+        if ((data->priority < 6) && ((uint)otherstate->active_ability != 341)) // Water Opening
+            data->priority += 1;
     }
 
     // macroburst
-    /*if(curskill == 359)
+    if(g_macroburst_acc_boost && (curskill == 359))
     {
         if((terrain_state->weather_type == WEATHER_CALM) && (terrain_state->weather_duration > 0))
             data->accuracy = 100;
-    }*/
+    }
 
     // miracle reprisal
     if(g_patch_miracle && (data->effect_id == 120))
@@ -400,7 +546,7 @@ SkillData *__fastcall do_adjusted_skill_data(int player, ushort skill_id)
         auto boost = 0;
         for(auto stat : otherstate->stat_modifiers)
             if(stat > 0)
-                boost += ((int)stat * 30);
+                boost += ((int)stat * 50);
         data->power = (byte)std::min((int)data->power + boost, 255);
     }
 
@@ -552,6 +698,154 @@ static bool do_drain_abl(int player)
     }
 }
 
+//Ancient Possession heal//
+static bool do_possess_heal(int player)
+{
+    auto state = get_battle_state(player);
+    auto puppet = decrypt_puppet(state->active_puppet);
+    static int _state = 0;
+    if (state->active_puppet == nullptr)
+        return false;
+
+    switch (_state)
+    {
+    case 0:
+        if (puppet.hp > 0)
+        {
+            reset_heal_anim(player);
+            _state = 1;
+            return true;
+        }
+        return false;
+
+    case 1:
+    {
+        if (do_heal_anim() == 0)
+            _state = 2;
+        return true;
+    }
+
+    case 2:
+    {
+        auto tstate = get_terrain_state();
+        auto max_hp = (double)calculate_stat(STAT_HP, &puppet);
+        bool do_heal = true;
+        auto heal = max_hp * (1.0 / 16.0);;
+        for (auto i : puppet.status_effects)
+            if ((i == STATUS_WEAK) || (i == STATUS_HVYWEAK))
+                do_heal = false;
+        if (do_heal)
+        {
+            if (tstate->terrain_type == TERRAIN_SUZAKU)
+                state->active_puppet->hp = (ushort)std::max((double)puppet.hp - std::max(heal * 0.5, 1.0), 0.0);
+            else
+                state->active_puppet->hp = (ushort)std::min((double)puppet.hp + heal, max_hp);
+        }
+        _state = 0;
+        return false;
+    }
+
+    default:
+        _state = 0;
+        return false;
+    }
+}
+
+static bool verdant_heal(int player)
+{
+    auto state = get_battle_state(player);
+    auto puppet = decrypt_puppet(state->active_puppet);
+    static int _state = 0;
+    static int _frames = 0;
+
+    switch (_state)
+    {
+    case 0:
+        _frames = 0;
+        if (g_wish_state[player].turns == 0)
+            return false;
+        --g_wish_state[player].turns;
+
+        if ((state->active_puppet != nullptr) && (puppet.hp > 0))
+        {
+            reset_heal_anim(player);
+            auto tstate = get_terrain_state();
+            auto max_hp = calculate_stat(STAT_HP, &puppet);
+
+            bool do_heal = true;
+            for (auto i : puppet.status_effects)
+            {
+                if ((i == STATUS_WEAK) || (i == STATUS_HVYWEAK))
+                {
+                    do_heal = false;
+                    state->active_puppet->status_effects[0] = STATUS_NONE;
+                    state->active_puppet->status_effects[1] = STATUS_NONE;
+                    break;
+                }
+            }
+
+            if (do_heal)
+            {
+                if (tstate->terrain_type == TERRAIN_SUZAKU)
+                {
+                    state->active_puppet->hp = (ushort)std::max((double)puppet.hp - std::max(g_wish_state[player].heal * 0.5, 1.0), 0.0);
+                    state->active_puppet->status_effects[0] = STATUS_NONE;
+                    state->active_puppet->status_effects[1] = STATUS_NONE;
+                }
+                else
+                {
+                    state->active_puppet->hp = (ushort)std::min(max_hp, puppet.hp + g_wish_state[player].heal);
+                    state->active_puppet->status_effects[0] = STATUS_NONE;
+                    state->active_puppet->status_effects[1] = STATUS_NONE;
+                }
+            }
+            _state = 1;
+            return true;
+        }
+        return false;
+
+    case 1:
+    {
+        if (do_heal_anim() == 0)
+        {
+            _state = 2;
+            return true;
+        }
+        return true;
+    }
+
+    case 2:
+    {
+        constexpr auto enheal = " feels healthier due\\nto the border!";
+        constexpr auto jpheal = "は結界の効果で元気になった！";
+        constexpr auto endrain = " has lost HP due to Suzaku!";
+        constexpr auto jpdrain = "は 朱雀に\\n体力を 奪われた……";
+        auto name = std::string(state->active_nickname);
+        bool english = tpdp_eng_translation();
+        bool drain = get_terrain_state()->terrain_type == TERRAIN_SUZAKU;
+        auto enmsg = drain ? endrain : enheal;
+        auto jpmsg = drain ? jpdrain : jpheal;
+        if (player == 1)
+            name = (english ? "Enemy " : "相手の　") + name;
+        if (set_battle_text(name + (english ? enmsg : jpmsg)) != 1)
+        {
+            if (++_frames > get_game_fps())
+            {
+                _frames = 0;
+                _state = 0;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    default:
+        _frames = 0;
+        _state = 0;
+        return false;
+    }
+}
+
 static bool do_future(int player)
 {
     static int _state = 0;
@@ -589,7 +883,7 @@ static bool do_future(int player)
         bool english = tpdp_eng_translation();
         if(player == 0)
             name = (english ? "Enemy " : "相手の　") + name;
-        auto msg = name + (english ? " was hit by a bomb!" : " に 爆弾が 命中した！");
+        auto msg = name + (english ? " was hit by the prayer!" : " に 願いが 命中した！");
         if(set_battle_text(msg) != 1)
         {
             if(++_frames > get_game_fps())
@@ -606,7 +900,7 @@ static bool do_future(int player)
     case 2:
     {
         bool english = tpdp_eng_translation();
-        if(set_battle_text(english ? "A bomb detonated!\\nBut it had no effect..." : "爆弾が 爆発した！\\nしかし 効果が無いようだ……") != 1)
+        if(set_battle_text(english ? "The prayer came true!\\nBut it had no effect..." : "願いが 叶いました！\\nしかし 効果が無いようだ……") != 1)
         {
             if(++_frames > get_game_fps())
             {
@@ -651,7 +945,20 @@ static bool do_item(int player)
         return true;
 
     case 2:
-        if((g_id_future_skill != ID_NONE) && do_future(player))
+        if (((uint)state->active_ability == g_id_possess) && (get_terrain_state()->weather_type == WEATHER_DUSTSTORM) && do_possess_heal(player))
+            return true;
+        _state = 3;
+        return true;
+
+    case 3:
+
+        if (verdant_heal(player))
+            return true;
+        _state = 4;
+        return true;
+
+    case 4:
+        if ((g_id_future_skill != ID_NONE) && do_future(player))
             return true;
         _state = 0;
         return false;
@@ -721,21 +1028,6 @@ void do_mine_trap()
 // Largely untested, enable it by uncommenting the corresponding
 // line in init_misc_hacks() below.
 /*
-bool on_battle_state(BattleState *state, uint32_t index)
-{
-    static int frames = 0;
-    if(index == 1)
-    {
-        if(++frames >= 120)
-        {
-            frames = 0;
-            return false;
-        }
-        return true;
-    }
-    return false;
-}
-
 __declspec(naked)
 void do_battle_state()
 {
@@ -753,45 +1045,21 @@ void do_battle_state()
     }
 
     static void *jmpaddr = nullptr;
-    static uint32_t last_index = 0xffffffff;
-    static bool do_hook = true;
     {
+        if(index += 2)
+            ++index;
         jmpaddr = RVA(0x2ccd4).ptr<void**>()[index];
-        if(index != last_index)
-        {
-            do_hook = true;
-            last_index = index;
-        }
-
-        if(do_hook)
-            do_hook = on_battle_state(state, index);
     }
 
-    if(do_hook)
+    __asm
     {
-        __asm
-        {
-            mov esp, ebp
-            pop ebp
-            mov esp, ebp
-            pop ebp
-            mov eax, 1
-            ret
-        }
+        mov esp, ebp
+        pop ebp
+        popfd
+        popad
+        jmp jmpaddr
     }
-    else
-    {
-        __asm
-        {
-            mov esp, ebp
-            pop ebp
-            popfd
-            popad
-            jmp jmpaddr
-        }
-    }
-}
-*/
+}*/
 
 #if 0
 void on_event(uint32_t index)
@@ -1296,7 +1564,7 @@ static int do_anti_status(int player)
     }
 }
 
-int do_form_change(int player, int pid, int style, bool switchin)
+int do_form_change(int player, int pid, int style, bool switchin, bool possess)
 {
     static auto _state = 0;
     static auto _frames = 0;
@@ -1318,14 +1586,29 @@ int do_form_change(int player, int pid, int style, bool switchin)
     {
     case 0:
         //state->field_0x4e = 0x00;
-        if(state->active_ability != (short)g_id_form_change) // wrong ability
-            return 0;
+        if (state->active_ability != (short)g_id_form_change) // wrong ability
+        {
+            if (state->active_ability != (short)g_id_possess)
+            {
+                return 0;
+            }
+            else if (possess && (state->active_puppet_id == pid) && (state->active_style_index == style))
+                return 0;
+
+        }
         if(switchin && !g_form_changes[player][active_index]) // not transformed yet
             return 0;
         else if(!switchin && g_form_changes[player][active_index]) // already transformed
             return 0;
-        if((puppet.puppet_id != g_id_form_base) || (puppet.style_index != g_id_form_base_style)) // wrong puppet
-            return 0;
+        if ((puppet.puppet_id != g_id_form_base) || (puppet.style_index != g_id_form_base_style)) // wrong puppet
+        {
+            // guaranteed not yuuma
+            if ((puppet.puppet_id != g_id_possess_base) || (puppet.style_index != g_id_possess_base_style))
+            {
+                // guaranteed not yuuma or possess
+                return 0; // block transform
+            }
+        }
         if(puppet.hp < 1) // ded
             return 0;
 
@@ -1362,7 +1645,8 @@ int do_form_change(int player, int pid, int style, bool switchin)
             newpuppet.style_index = (byte)style;
             for(auto i = 0; i < 6; ++i)
                 state->puppet_stats[i] = (ushort)calculate_stat(i, &newpuppet);
-            g_form_changes[player][active_index] = true;
+            if (!possess)
+                g_form_changes[player][active_index] = true;
         }
         return 1;
 
@@ -1372,7 +1656,7 @@ int do_form_change(int player, int pid, int style, bool switchin)
         {
             state->field_0x4e = 0x00;
             _state = 4;
-            if(!switchin)
+            if(!switchin && !possess)
             {
                 state->active_puppet->hp = (ushort)calculate_stat(STAT_HP, &puppet);
                 reset_heal_anim(player);
@@ -1381,7 +1665,7 @@ int do_form_change(int player, int pid, int style, bool switchin)
         return 1;
 
     case 4:
-        if(switchin || (do_heal_anim() == 0))
+        if(possess || switchin || (do_heal_anim() == 0))
         {
             _state = 5;
             clear_battle_text();
@@ -1411,6 +1695,59 @@ int do_form_change(int player, int pid, int style, bool switchin)
         _frames = 0;
         return 0;
         break;
+    }
+}
+
+static int gradation(int player, const SkillData& skilldata)
+{
+    auto otherstate = get_battle_state(!player);
+    static int _state = 0;
+    static auto _frames = 0;
+
+
+    switch (_state)
+    {
+    case 0:
+        if (((otherstate->active_type1 != skilldata.element) || (otherstate->active_type2 != ELEMENT_NONE)) && (otherstate->active_puppet->hp > 0))
+        {
+            otherstate->active_type1 = skilldata.element;
+            otherstate->active_type2 = ELEMENT_NONE;
+            reset_ability_activation(player);
+            _state = 1;
+            return 1;
+        }
+        return 0;
+
+    case 1:
+        if (show_ability_activation(player) == 0)
+        {
+            _state = 2;
+        }
+        return 1;
+
+    case 2:
+    {
+        auto name = std::string(otherstate->active_nickname);
+        bool english = tpdp_eng_translation();
+
+        if (player == 0)
+            name = (english ? "Enemy " : "相手の　") + name;
+        auto msg = std::string(name) + (english ? " has changed type to " : " の属性は") + (get_element_string(skilldata.element)) + (english ? "!" : " に変わった！");
+        if (set_battle_text(msg.c_str()) != 1)
+        {
+            if (++_frames > get_game_fps())
+            {
+                _state = 0;
+                _frames = 0;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    default:
+        _state = 0;
+        return 0;
     }
 }
 
@@ -1517,6 +1854,14 @@ static int do_morale(int player)
         return 1;
 
     case 1:
+        if (show_ability_activation(player) == 0)
+        {
+            reset_ability_activation(player);
+            _state = 2;
+        }
+        return 1;
+
+    case 2:
         if(apply_stat_mod(STAT_SPATK, 1, player) == 0)
         {
             _state = 0;
@@ -1529,6 +1874,118 @@ static int do_morale(int player)
         return 0;
     }
 }
+
+static int do_warmup(int player)
+{
+    static auto _state = 0;
+
+    switch (_state)
+    {
+    case 0:
+        reset_stat_mod();
+        _state = 1;
+        return 1;
+
+    case 1:
+        if (show_ability_activation(player) == 0)
+        {
+            reset_ability_activation(player);
+            _state = 2;
+        }
+        return 1;
+
+    case 2:
+        if (apply_stat_mod(STAT_SPEED, 2, player) == 0)
+        {
+            _state = 0;
+            return 0;
+        }
+        return 1;
+
+    default:
+        _state = 0;
+        return 0;
+    }
+}
+/*
+static int do_feast(int player)
+{
+    auto state = get_battle_state(player);
+    auto otherstate = get_battle_state(!player);
+    static int _state = 0;
+    static int _frames = 0;
+    static bool weak = false;
+
+        switch (_state)
+        {
+        case 0:
+        {
+            _frames = 0;
+            auto puppet = decrypt_puppet(state->active_puppet);
+            auto max_hp = (double)calculate_stat(STAT_HP, &puppet);
+            if ((puppet.hp != 0) && (puppet.hp < max_hp))
+            {
+                auto tstate = get_terrain_state();
+                weak = false;
+                for (auto state->active_puppet : state->active_puppet.status_effects)
+                    if ((state->active_puppet == STATUS_WEAK) || (state->active_puppet == STATUS_HVYWEAK))
+                        weak = true;
+                if (!weak)
+                {
+                    if (tstate->terrain_type == TERRAIN_SUZAKU)
+                        state->active_puppet->hp = (ushort)std::max((double)state->active_puppet->hp - std::max(max_hp * g_mod_feast * 0.5, 1.0), 0.0);
+                    else
+                        state->active_puppet->hp = (ushort)std::min((double)state->active_puppet->hp + std::max(max_hp * g_mod_feast, 1.0), max_hp);
+                }
+                reset_heal_anim(player);
+                _state = 1;
+                return 1;
+            }
+        }
+        return 0;
+
+        case 1:
+            if (weak || (do_heal_anim() == 0))
+                _state = 2;
+            return 1;
+
+        case 2:
+        {
+            if (weak || (state->num_attacks > 0))
+            {
+                _frames = 0;
+                _state = 0;
+                return 0;
+            }
+            constexpr auto enheal = " recovered HP with\\nAbsorber!";
+            constexpr auto jpheal = "は　アブソーバーで\\n体力を　回復した！";
+            constexpr auto endrain = " has lost HP due to Suzaku!";
+            constexpr auto jpdrain = "は 朱雀に\\n体力を 奪われた……";
+            auto name = std::string(otherstate->active_nickname);
+            bool english = tpdp_eng_translation();
+            bool drain = get_terrain_state()->terrain_type == TERRAIN_SUZAKU;
+            auto enmsg = drain ? endrain : enheal;
+            auto jpmsg = drain ? jpdrain : jpheal;
+            if (player == 0)
+                name = (english ? "Enemy " : "相手の　") + name;
+            if (set_battle_text(name + (english ? enmsg : jpmsg)) != 1)
+            {
+                if (++_frames > get_game_fps())
+                {
+                    _frames = 0;
+                    _state = 0;
+                    return 0;
+                }
+            }
+            return 1;
+        }
+
+        default:
+            _state = 0;
+            _frames = 0;
+            return 0;
+        }
+}*/
 
 static int do_curse(int player)
 {
@@ -1597,7 +2054,7 @@ static int skill_dispatch(int player, uint16_t effect_id, int effect_chance)
     switch(_state)
     {
     case 0:
-        if(has_held_item(otherstate, g_id_anti_status) && can_use_items(otherstate) && (skilldata.type == SKILL_TYPE_STATUS))
+        if (((unsigned int)otherstate->active_ability == g_id_anti_status) && (skilldata.type == SKILL_TYPE_STATUS))
             return do_anti_status(player); // Eden's Apple
         if(do_skill(player, effect_id, effect_chance) == 0)
             _state = 1;
@@ -1636,12 +2093,31 @@ static int skill_dispatch(int player, uint16_t effect_id, int effect_chance)
     case 6:
         if((state->dmg_dealt > 0) && (otherstate->active_puppet->hp <= 0) && (do_imposter(player) != 0))
             return 1;
-        _state = 7;
+        _state = 8;
         return 1;
 
-    case 7:
+   /*case 7:
+        if ((state->active_ability == (short)g_id_feast) && (state->dmg_dealt > 0) && (otherstate->active_puppet->hp <= 0) && (do_feast(player) != 0))
+            return 1;
+        _state = 8;
+        return 1;*/ 
+
+    case 8:
+        if ((state->active_ability == (short)g_id_warmup) && (state->dmg_dealt > 0) && (otherstate->active_puppet->hp <= 0) && (do_warmup(player) != 0))
+            return 1;
+        _state = 9;
+        return 1;
+
+    case 9:
         if((otherstate->active_ability == (short)g_id_curse) && (state->dmg_dealt > 0) && (state->active_puppet->hp > 0) && (do_curse(player) != 0))
             return 1;
+        _state = 10;
+        return 1;
+
+    case 10:
+        if ((state->active_ability == (short)g_id_gradate) && (skilldata.type != SKILL_TYPE_STATUS) && (gradation(player, skilldata) != 0))
+            return 1;
+
         _state = 0;
         return 0;
 
@@ -1918,6 +2394,7 @@ static void load_extra_music()
             auto path = utf_narrow(L"dat\\gn_dat4\\bgm\\" + filename);
             load_music_file(&g_music_handle_buf[sid], 3, path);
             set_music_loop(sample, g_music_handle_buf[sid]);
+            *(uint32_t*)&g_music_loop_buf[sid * sizeof(uint32_t)] = sample;
             ++count;
         }
     }
@@ -1973,6 +2450,78 @@ static void patch_catch_rate(uint8_t lvl_factor)
     patch_memory(RVA(0xcea4), code, sizeof(code));
 }
 
+void on_event(uint32_t index)
+{
+    auto pnext = RVA(0x975e2c).ptr<uint32_t*>();
+
+    switch (index)
+    {
+    case 0x50:
+        abort();
+        break;
+
+    case 0x51:
+    {
+        std::ofstream f("save\\extended.ini", std::ios::trunc);
+        f << "[general]\r\nunlock_puppets=true";
+        *pnext += 1;
+        break;
+    }
+
+    case 0x52:
+    {
+        std::ofstream f("save\\extended.ini", std::ios::trunc);
+        f << "[general]\r\nunlock_puppets=false";
+        *pnext += 1;
+        break;
+    }
+
+    default:
+        break;
+    }
+}
+
+__declspec(naked)
+void do_event()
+{
+    uint32_t index;
+    __asm
+    {
+        pushad
+        pushfd
+        push ebp
+        mov ebp, esp
+        sub esp, __LOCAL_SIZE
+        mov index, eax
+    }
+
+    static void* jmpaddr = nullptr;
+    {
+        if (index < 0x50)
+            jmpaddr = RVA(0x177348).ptr<void**>()[index];
+        else
+            jmpaddr = RVA(0x174210).ptr<void*>();
+        on_event(index);
+    }
+
+    __asm
+    {
+        mov esp, ebp
+        pop ebp
+        popfd
+        popad
+        jmp jmpaddr
+    }
+}
+
+void patch_event_table()
+{
+    patch_jump(RVA(0x1742b9), &do_event);
+    uint8_t max_evt = 0x52;
+    patch_memory(RVA(0x1742b0 + 2), &max_evt, 1);
+}
+
+
 // initialization
 void init_misc_hacks()
 {
@@ -2027,6 +2576,9 @@ void init_misc_hacks()
     if(g_patch_miracle)
         patch_miracle();
 
+    // macroburst
+    g_macroburst_acc_boost = IniFile::global.get_bool("skills", "macroburst_acc_boost");
+
     // catch rate
     auto lvl_factor = IniFile::global.get_uint("general", "catch_rate_lvl_factor");
     if(lvl_factor != ID_NONE)
@@ -2051,7 +2603,6 @@ void init_misc_hacks()
     g_id_suzaku_seed = IniFile::global.get_uint("items", "id_suzaku_seed");
     g_id_giant_bit = IniFile::global.get_uint("items", "id_giant_bit");
     g_id_resheal = IniFile::global.get_uint("items", "id_resheal");
-    g_id_anti_status = IniFile::global.get_uint("items", "id_anti_status");
 
     // config item mods
     g_mod_wyrmprint_high = IniFile::global.get_double("items", "mod_wyrmprint_high", g_mod_wyrmprint_high);
@@ -2067,6 +2618,7 @@ void init_misc_hacks()
     // config ability IDs
     g_id_stacking = IniFile::global.get_uint("abilities", "id_stacking");
     g_id_light_wings = IniFile::global.get_uint("abilities", "id_light_wings");
+    g_id_water_wings = IniFile::global.get_uint("abilities", "id_water_wings");
     g_id_astronomy = IniFile::global.get_uint("abilities", "id_bu_abl");
     g_id_empowered = IniFile::global.get_uint("abilities", "id_en_abl");
     g_id_drain_abl = IniFile::global.get_uint("abilities", "id_drain_abl");
@@ -2082,6 +2634,18 @@ void init_misc_hacks()
     g_id_choice_focus = IniFile::global.get_uint("abilities", "id_choice_focus");
     g_id_choice_spread = IniFile::global.get_uint("abilities", "id_choice_spread");
     g_id_imposter = IniFile::global.get_uint("abilities", "id_imposter");
+    g_id_anti_status = IniFile::global.get_uint("abilities", "id_anti_status");
+    g_id_magic = IniFile::global.get_uint("abilities", "id_magic");
+    g_id_warmup = IniFile::global.get_uint("abilities", "id_warmup");
+    g_id_feast = IniFile::global.get_uint("abilities", "id_feast");
+    g_id_sand_castle = IniFile::global.get_uint("abilities", "id_sand_castle");
+    g_id_possess = IniFile::global.get_uint("abilities", "id_possess");
+    g_id_possess_target = IniFile::global.get_uint("abilities", "id_possess_target");
+    g_id_possess_target_style = IniFile::global.get_uint("abilities", "id_possess_target_style");
+    g_id_possess_base = IniFile::global.get_uint("abilities", "id_possess_base");
+    g_id_possess_base_style = IniFile::global.get_uint("abilities", "id_possess_base_style");
+    g_id_gradate = IniFile::global.get_uint("abilities", "id_gradate");
+
 
     // config ability mods
     g_mod_class_abl = IniFile::global.get_double("abilities", "mod_class_abl", g_mod_class_abl);
@@ -2090,6 +2654,9 @@ void init_misc_hacks()
     g_mod_calm_traveler = IniFile::global.get_double("abilities", "mod_calm_traveler", g_mod_calm_traveler);
     g_mod_merciless = IniFile::global.get_double("abilities", "mod_merciless", g_mod_merciless);
     g_mod_choice = IniFile::global.get_double("abilities", "mod_choice", g_mod_choice);
+    g_mod_magic = IniFile::global.get_double("abilities", "mod_magic", g_mod_magic);
+    //g_mod_feast = IniFile::global.get_double("abilities", "mod_feast", g_mod_feast);
+    g_mod_sand_castle = IniFile::global.get_double("abilities", "mod_sand_castle", g_mod_sand_castle);
 
     // config skills
     g_id_blitzkrieg = IniFile::global.get_uint("skills", "effect_id_blitzkrieg");
@@ -2118,4 +2685,6 @@ void init_misc_hacks()
         auto chance = (uint8_t)dark_chance;
         patch_memory(RVA(0x5ce7 + 6u), &chance, 1);
     }
+
+    patch_event_table();
 }

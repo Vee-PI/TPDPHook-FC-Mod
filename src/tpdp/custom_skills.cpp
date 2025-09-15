@@ -1,4 +1,5 @@
 #include "hook_tpdp.h"
+#include "misc_hacks.h"
 #include "custom_skills.h"
 #include "tpdp_data.h"
 #include "../hook.h"
@@ -8,6 +9,8 @@
 #include <vector>
 #include <utility>
 #include <algorithm>
+#include <gamedata.h>
+#include <ShlObj.h>
 
 // Implementations for custom skills go here.
 // Register skill functions to their effect IDs in init_custom_skills()
@@ -28,6 +31,11 @@ static auto g_id_refresh = ID_NONE;
 //static auto g_id_solar = ID_NONE;
 static auto g_id_future = ID_NONE;
 static auto g_id_fading = ID_NONE;
+static auto g_id_tabula = ID_NONE;
+static auto g_id_steps = ID_NONE;
+static auto g_id_steps2 = ID_NONE;
+static auto g_id_zephyr = ID_NONE;
+static auto g_id_verdant_border = ID_NONE;
 
 int g_future_turns[2]{};
 
@@ -36,6 +44,20 @@ static std::vector<StatusPair> g_calamity_statuses;
 
 int __cdecl season_activator(int /*player*/)
 {
+    skill_succeeded() = 1;
+    return 1;
+}
+
+int __cdecl verdant_activator(int player)
+{
+    auto state = get_battle_state(player);
+    auto puppet = decrypt_puppet(state->active_puppet);
+    for (auto i : puppet.status_effects)
+        if ((i == STATUS_WEAK) || (i == STATUS_HVYWEAK))
+        {
+            skill_succeeded() = 0;
+            return 0;
+        }
     skill_succeeded() = 1;
     return 1;
 }
@@ -205,6 +227,133 @@ int __cdecl skill_delirium(int player, int /*effect_chance*/)
     }
 }
 
+int __cdecl skill_verdant_border(int player, int /*effect_chance*/)
+{
+
+    static int _frames = 0;
+    auto state = get_battle_state(player);
+    auto puppet = decrypt_puppet(state->active_puppet);
+    auto& skill_state = get_skill_state();
+    auto max_hp = calculate_stat(STAT_HP, &puppet);
+    switch (skill_state)
+    {
+    case 0:
+        _frames = 0;
+        if (!skill_succeeded())
+        {
+            skill_state = 3;
+            return 0;
+        }
+        g_wish_state[player].heal = max_hp * 0.25;
+        g_wish_state[player].turns = 2;
+        skill_state = 1;
+        return 1;
+
+    case 1:
+    {
+        constexpr auto enheal = " has deployed\\nits border!";
+        constexpr auto jpheal = "は結界を展開した！";
+        auto name = std::string(state->active_nickname);
+        bool english = tpdp_eng_translation();
+        auto enmsg = enheal;
+        auto jpmsg = jpheal;
+        if (player == 1)
+            name = (english ? "Enemy " : "相手の　") + name;
+        if (set_battle_text(name + (english ? enmsg : jpmsg)) != 1)
+        {
+            if (++_frames > get_game_fps())
+            {
+                _frames = 0;
+                skill_state = 3;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    default:
+        _frames = 0;
+        return 0;
+        break;
+    }
+}
+
+int __cdecl skill_steps(int player, int /*effect_chance*/)
+{
+    auto& skill_state = get_skill_state();
+    switch (skill_state)
+    {
+    case 0:
+        if (!skill_succeeded())
+        {
+            skill_state = 3;
+            return 0;
+        }
+        reset_stat_mod();
+        skill_state = 1;
+        return 1;
+
+    case 1:
+        if (apply_stat_mod(STAT_SPATK, +1, player) == 0)
+        {
+            skill_state = 2;
+            reset_stat_mod();
+        }
+        return 1;
+
+    case 2:
+        if (apply_stat_mod(STAT_FODEF, +1, player) == 0)
+        {
+            skill_state = 3;
+            return 0;
+        }
+        return 1;
+
+    default:
+        return 0;
+        break;
+    }
+}
+
+int __cdecl skill_steps2(int player, int /*effect_chance*/)
+{
+    auto& skill_state = get_skill_state();
+    switch (skill_state)
+    {
+    case 0:
+        if (!skill_succeeded())
+        {
+            skill_state = 3;
+            return 0;
+        }
+        reset_stat_mod();
+        skill_state = 1;
+        return 1;
+
+    case 1:
+        if (apply_stat_mod(STAT_FOATK, +1, player) == 0)
+        {
+            skill_state = 2;
+            reset_stat_mod();
+        }
+        return 1;
+
+    case 2:
+        if (apply_stat_mod(STAT_SPDEF, +1, player) == 0)
+        {
+            skill_state = 3;
+            return 0;
+        }
+        return 1;
+
+    default:
+        return 0;
+        break;
+    }
+}
+
+
+
 int __cdecl skill_sting(int player, int /*effect_chance*/)
 {
     auto& skill_state = get_skill_state();
@@ -234,6 +383,65 @@ int __cdecl skill_sting(int player, int /*effect_chance*/)
     }
 }
 
+int __cdecl skill_tabula(int player, int /*effect_chance*/)
+{
+    auto& skill_state = get_skill_state();
+    auto otherstate = get_battle_state(!player);
+    auto otherpuppet = decrypt_puppet(otherstate->active_puppet);
+    static int _frames = 0;
+    switch(skill_state)
+    {
+    case 0:
+        if (!skill_succeeded())
+        {
+            skill_state = 4;
+            return 0;
+            break;
+        }
+    case 1:
+        if (skill_succeeded() && (otherstate->active_type1 == ELEMENT_VOID) && (otherstate->active_type2 == ELEMENT_NONE))
+        {
+                skill_state = 4;
+                return 0;
+                break;
+        }
+
+    case 2:
+        if (otherpuppet.hp > 0)
+        {
+            {
+                otherstate->active_type1 = ELEMENT_VOID;
+                otherstate->active_type2 = ELEMENT_NONE;
+            }
+            skill_state = 3;
+            return 1;
+        }
+        else
+            skill_state = 4;
+        return 0;
+        break;
+
+    case 3:
+    {
+        auto name = std::string(otherstate->active_nickname);
+        bool english = tpdp_eng_translation();
+        if (player == 0)
+            name = (english ? "Enemy " : "相手の　") + name;
+        if (set_battle_text(name + (english ? " has become a Void type!" : " は 自身の状態異常と！")) != 1)
+        {
+            if (++_frames > get_game_fps())
+            {
+                skill_state = 4;
+                _frames = 0;
+                return 0;
+            }
+        }
+    }
+        return 1;
+    }
+    return 0;
+}
+
 int __cdecl skill_refresh(int player, int /*effect_chance*/)
 {
     auto& skill_state = get_skill_state();
@@ -250,8 +458,6 @@ int __cdecl skill_refresh(int player, int /*effect_chance*/)
         reset_heal_anim(player);
         state->active_puppet->status_effects[0] = 0;
         state->active_puppet->status_effects[1] = 0;
-        for(auto& stat : state->stat_modifiers)
-            stat = 0;
         skill_state = 1;
         return 1;
 
@@ -269,7 +475,7 @@ int __cdecl skill_refresh(int player, int /*effect_chance*/)
         bool english = tpdp_eng_translation();
         if(player != 0)
             name = (english ? "Enemy " : "相手の　") + name;
-        auto msg = name + (english ? " cleared its status effects\\nand stat modifiers!" : " は 自身の状態異常と\\n能力変化を 元に戻した！");
+        auto msg = name + (english ? " cleared its status effects!" : " は 自身の状態異常と！");
         if(set_battle_text(msg) != 1)
         {
             if(++_frames > get_game_fps())
@@ -513,6 +719,70 @@ do_thing:
 }
 #endif
 
+int __cdecl skill_zephyr(int player, int /*effect_chance*/)
+{
+    auto& skill_state = get_skill_state();
+    auto state = get_battle_state(player);
+    auto otherstate = get_battle_state(!player);
+    static int _frames = 0;
+    switch(skill_state)
+    {
+    case 0:
+        if(!skill_succeeded())
+        {
+            skill_state = 3;
+            return 0;
+        }
+        skill_state = 1;
+        return 1;
+
+    case 1:
+        state->num_mine_trap = 0;
+        state->num_poison_trap = 0;
+        state->stealth_trap = false;
+        state->bind_trap = false;
+        state->trap_turns = 0;
+        state->drain_seed = false;
+        state->field_barrier_turns = 0;
+        state->field_protect_turns = 0;
+        // ---
+        otherstate->num_mine_trap = 0;
+        otherstate->num_poison_trap = 0;
+        otherstate->stealth_trap = false;
+        otherstate->bind_trap = false;
+        otherstate->trap_turns = 0;
+        otherstate->drain_seed = false;
+        otherstate->field_barrier_turns = 0;
+        otherstate->field_protect_turns = 0;
+        clear_battle_text();
+        skill_state = 2;
+        return 1;
+
+    case 2:
+    {
+        auto name = std::string(state->active_nickname);
+        bool english = tpdp_eng_translation();
+        if(player != 0)
+            name = (english ? "Enemy " : "相手の　") + name;
+        auto msg = name + (english ? " cleared the field of hazards!" : " cleared the field of hazards!");
+        if(set_battle_text(msg) != 1)
+        {
+            if(++_frames > get_game_fps())
+            {
+                skill_state = 3;
+                _frames = 0;
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    default:
+        return 0;
+        break;
+    }
+}
+
 // Bind skill functions to effect ids.
 void init_custom_skills()
 {
@@ -557,6 +827,13 @@ void init_custom_skills()
         register_custom_skill(g_id_delirium, &skill_delirium);
     }
 
+    g_id_tabula = IniFile::global.get_uint("skills", "effect_id_tabula");
+    if (g_id_tabula != ID_NONE)
+    {
+        init_new_skill(g_id_tabula);
+        register_custom_skill(g_id_tabula, &skill_tabula);
+    }
+
     g_id_sting = IniFile::global.get_uint("skills", "effect_id_sting");
     if(g_id_sting != ID_NONE)
     {
@@ -569,6 +846,20 @@ void init_custom_skills()
     {
         init_new_skill(g_id_refresh);
         register_custom_skill(g_id_refresh, &skill_refresh);
+    }
+
+    g_id_steps = IniFile::global.get_uint("skills", "effect_id_steps");
+    if (g_id_refresh != ID_NONE)
+    {
+        init_new_skill(g_id_steps);
+        register_custom_skill(g_id_steps, &skill_steps);
+    }
+
+    g_id_steps2 = IniFile::global.get_uint("skills", "effect_id_steps2");
+    if (g_id_refresh != ID_NONE)
+    {
+        init_new_skill(g_id_steps2);
+        register_custom_skill(g_id_steps2, &skill_steps2);
     }
 
 #if 0
@@ -595,6 +886,21 @@ void init_custom_skills()
         copy_skill_effect(60, g_id_fading);
         //register_custom_skill(g_id_fading, RVA(0x1a5420).ptr<SkillCall>());
         register_custom_skill_activator(g_id_fading, &fading_activator);
+    }
+
+    g_id_zephyr = IniFile::global.get_uint("skills", "effect_id_zephyr");
+    if(g_id_zephyr != ID_NONE)
+    {
+        init_new_skill(g_id_zephyr);
+        register_custom_skill(g_id_zephyr, &skill_zephyr);
+    }
+
+    g_id_verdant_border = IniFile::global.get_uint("skills", "effect_id_verdant_border");
+    if (g_id_verdant_border != ID_NONE)
+    {
+        init_new_skill(g_id_verdant_border);
+        register_custom_skill(g_id_verdant_border, &skill_verdant_border);
+        register_custom_skill_activator(g_id_verdant_border, &verdant_activator);
     }
 
     // pre-build table of status combos for supernova/calamity
