@@ -271,27 +271,25 @@ void do_battlestate_reset()
     for(auto& i : g_future_turns)
         i = 0;
 
-    load_puppet_sprite(g_id_possess_target);
-
     auto bdata = get_battle_data();
+    bool loaded_yuuma = false, loaded_posses = false;
     for(auto i = 0; i < 2; ++i) // load form change sprite if user present
     {
         for(auto& j : bdata[i].puppets)
         {
             auto puppet = decrypt_puppet(&j);
-            if((puppet.puppet_id == g_id_form_base) && (puppet.style_index == g_id_form_base_style))
+            if((puppet.puppet_id == g_id_form_base) && (puppet.style_index == g_id_form_base_style) && (loaded_yuuma == false))
             {
                 load_puppet_sprite(g_id_form_target);
-                goto stop;
+                loaded_yuuma = true;
             }
-            else if ((puppet.puppet_id == g_id_possess_base) && (puppet.style_index == g_id_possess_base_style))
+            else if ((puppet.puppet_id == g_id_possess_base) && (puppet.style_index == g_id_possess_base_style) && (loaded_posses == false))
             {
                 load_puppet_sprite(g_id_possess_target);
-                goto stop;
+                loaded_posses = true;
             }
         }
     }
-stop:
 
     for (auto& wish : g_wish_state)
         wish = {};
