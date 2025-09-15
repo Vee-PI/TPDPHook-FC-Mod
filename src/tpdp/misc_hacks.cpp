@@ -162,6 +162,9 @@ std::string get_element_string(unsigned int type)
 static std::unique_ptr<uint32_t[]> g_music_handle_buf;
 static std::unique_ptr<uint8_t[]> g_music_loop_buf;
 
+static std::unique_ptr<uint8_t[]> g_player_level_cap = std::make_unique<uint8_t[]>(0x198 * 5);
+static std::unique_ptr<uint8_t[]> g_ai_level_cap = std::make_unique<uint8_t[]>(0x198 * 5);
+
 std::once_flag g_music_init;
 
 std::string g_website_url = "";
@@ -271,27 +274,25 @@ void do_battlestate_reset()
     for(auto& i : g_future_turns)
         i = 0;
 
-    load_puppet_sprite(g_id_possess_target);
-
     auto bdata = get_battle_data();
+    bool loaded_yuuma = false, loaded_posses = false;
     for(auto i = 0; i < 2; ++i) // load form change sprite if user present
     {
         for(auto& j : bdata[i].puppets)
         {
             auto puppet = decrypt_puppet(&j);
-            if((puppet.puppet_id == g_id_form_base) && (puppet.style_index == g_id_form_base_style))
+            if((puppet.puppet_id == g_id_form_base) && (puppet.style_index == g_id_form_base_style) && (loaded_yuuma == false))
             {
                 load_puppet_sprite(g_id_form_target);
-                goto stop;
+                loaded_yuuma = true;
             }
-            else if ((puppet.puppet_id == g_id_possess_base) && (puppet.style_index == g_id_possess_base_style))
+            else if ((puppet.puppet_id == g_id_possess_base) && (puppet.style_index == g_id_possess_base_style) && (loaded_posses == false))
             {
                 load_puppet_sprite(g_id_possess_target);
-                goto stop;
+                loaded_posses = true;
             }
         }
     }
-stop:
 
     for (auto& wish : g_wish_state)
         wish = {};
@@ -2450,9 +2451,45 @@ static void patch_catch_rate(uint8_t lvl_factor)
     patch_memory(RVA(0xcea4), code, sizeof(code));
 }
 
+static void patch_level_cap(unsigned int player_lvl, unsigned int ai_lvl)
+{
+    for(size_t i = 0; i < 5; ++i)
+    {
+        *(uint32_t*)(&g_player_level_cap[i * 0x198]) = libtpdp::exp_for_level(i, player_lvl, true);
+        *(uint32_t*)(&g_ai_level_cap[i * 0x198]) = libtpdp::exp_for_level(i, ai_lvl, true);
+    }
+
+    void *ai_addr = RVA(0x1566d1 + 2);
+    void *player_addrs[] = { RVA(0x1659aa + 2), RVA(0x189864 + 2), RVA(0x1898c4 + 2) };
+
+    void *addr = g_ai_level_cap.get();
+    patch_memory(ai_addr, &addr, sizeof(addr));
+    addr = g_player_level_cap.get();
+    for(auto dest : player_addrs)
+        patch_memory(dest, &addr, sizeof(addr));
+}
+
+static void unpatch_level_cap()
+{
+    void *addrs[] = { RVA(0x1566d1 + 2), RVA(0x1659aa + 2), RVA(0x189864 + 2), RVA(0x1898c4 + 2) };
+
+    void *addr = RVA(0x93ac60);
+    for(auto dest : addrs)
+        patch_memory(dest, &addr, sizeof(addr));
+}
+
+void __cdecl load_dod_file(uint16_t id, [[maybe_unused]] bool set_exp)
+{
+    auto fun = RVA(0x156590).ptr<void(__cdecl*)(uint16_t, bool)>();
+    fun(id, true);
+}
+
 void on_event(uint32_t index)
 {
     auto pnext = RVA(0x975e2c).ptr<uint32_t*>();
+    auto save_buf = RVA(0xd7c9f1).ptr<uint16_t*>();
+    auto evs_buf = RVA(0xC69480).ptr<uint16_t*>();
+    auto evs_index = *RVA(0x975E2C).ptr<uint32_t*>();
 
     switch (index)
     {
@@ -2475,6 +2512,35 @@ void on_event(uint32_t index)
         *pnext += 1;
         break;
     }
+
+    case 0x53:
+    {
+        auto player_level = evs_buf[(evs_index * 10) + 1];
+        auto ai_level = evs_buf[(evs_index * 10) + 2];
+        if(player_level > 0)
+            save_buf[0x80 - 1] = player_level;
+        if(ai_level > 0)
+            save_buf[0x80 - 2] = ai_level;
+        ++(*pnext);
+    }
+    break;
+
+    case 0x54:
+    {
+        auto player_level = evs_buf[(evs_index * 10) + 1];
+        auto ai_level = evs_buf[(evs_index * 10) + 2];
+        patch_level_cap(player_level ? player_level : save_buf[0x80 - 1], ai_level ? ai_level : save_buf[0x80 - 2]);
+        if(evs_buf[(evs_index * 10) + 3] > 0)
+            scan_and_replace_call(RVA(0x156590), &load_dod_file);
+        ++(*pnext);
+    }
+    break;
+
+    case 0x55:
+        unpatch_level_cap();
+        scan_and_replace_call(&load_dod_file, RVA(0x156590));
+        ++(*pnext);
+        break;
 
     default:
         break;
@@ -2517,7 +2583,7 @@ void do_event()
 void patch_event_table()
 {
     patch_jump(RVA(0x1742b9), &do_event);
-    uint8_t max_evt = 0x52;
+    uint8_t max_evt = 0x55;
     patch_memory(RVA(0x1742b0 + 2), &max_evt, 1);
 }
 
@@ -2539,7 +2605,7 @@ void init_misc_hacks()
     //patch_jump(RVA(0x293e7), &do_battle_state);
 
     // hook into event table
-    //patch_event_table();
+    patch_event_table();
 
     // bgm limit
     if(IniFile::global.get_bool("general", "extra_music_hack"))
@@ -2685,6 +2751,4 @@ void init_misc_hacks()
         auto chance = (uint8_t)dark_chance;
         patch_memory(RVA(0x5ce7 + 6u), &chance, 1);
     }
-
-    patch_event_table();
 }
