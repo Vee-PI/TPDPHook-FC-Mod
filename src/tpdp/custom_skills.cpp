@@ -27,14 +27,16 @@ static auto g_id_delirium = ID_NONE;
 static auto g_id_custom1 = ID_NONE;
 static auto g_id_custom2 = ID_NONE;
 static auto g_id_sting = ID_NONE;
-static auto g_id_refresh = ID_NONE;
+static auto g_id_refresh = ID_NONE; //ID 878
 //static auto g_id_solar = ID_NONE;
-static auto g_id_future = ID_NONE;
-static auto g_id_fading = ID_NONE;
-static auto g_id_tabula = ID_NONE;
-static auto g_id_steps = ID_NONE;
-static auto g_id_steps2 = ID_NONE;
-static auto g_id_zephyr = ID_NONE;
+static auto g_id_future = ID_NONE; //ID 876, but going unused
+static auto g_id_fading = ID_NONE; //ID 853
+static auto g_id_tabula = ID_NONE; //ID 882
+static auto g_id_steps = ID_NONE; //ID 880
+static auto g_id_steps2 = ID_NONE; //ID 881
+static auto g_id_zephyr = ID_NONE; //ID 879
+static auto g_id_spiritdance = ID_NONE; //ID 887
+static auto g_id_hearth = ID_NONE; //ID 888
 static auto g_id_verdant_border = ID_NONE;
 
 int g_future_turns[2]{};
@@ -252,13 +254,13 @@ int __cdecl skill_verdant_border(int player, int /*effect_chance*/)
     case 1:
     {
         constexpr auto enheal = " has deployed\\nits border!";
-        constexpr auto jpheal = "‚ÍŒ‹ŠE‚ğ“WŠJ‚µ‚½I";
+        constexpr auto jpheal = "ã¯çµç•Œã‚’å±•é–‹ã—ãŸï¼";
         auto name = std::string(state->active_nickname);
         bool english = tpdp_eng_translation();
         auto enmsg = enheal;
         auto jpmsg = jpheal;
         if (player == 1)
-            name = (english ? "Enemy " : "‘Šè‚Ì@") + name;
+            name = (english ? "Enemy " : "ç›¸æ‰‹ã®ã€€") + name;
         if (set_battle_text(name + (english ? enmsg : jpmsg)) != 1)
         {
             if (++_frames > get_game_fps())
@@ -426,8 +428,8 @@ int __cdecl skill_tabula(int player, int /*effect_chance*/)
         auto name = std::string(otherstate->active_nickname);
         bool english = tpdp_eng_translation();
         if (player == 0)
-            name = (english ? "Enemy " : "‘Šè‚Ì@") + name;
-        if (set_battle_text(name + (english ? " has become a Void type!" : " ‚Í ©g‚Ìó‘ÔˆÙí‚ÆI")) != 1)
+            name = (english ? "Enemy " : "ç›¸æ‰‹ã®ã€€") + name;
+        if (set_battle_text(name + (english ? " has become a Void type!" : " ã¯ è‡ªèº«ã®çŠ¶æ…‹ç•°å¸¸ã¨ï¼")) != 1)
         {
             if (++_frames > get_game_fps())
             {
@@ -474,8 +476,8 @@ int __cdecl skill_refresh(int player, int /*effect_chance*/)
         auto name = std::string(state->active_nickname);
         bool english = tpdp_eng_translation();
         if(player != 0)
-            name = (english ? "Enemy " : "‘Šè‚Ì@") + name;
-        auto msg = name + (english ? " cleared its status effects!" : " ‚Í ©g‚Ìó‘ÔˆÙí‚ÆI");
+            name = (english ? "Enemy " : "ç›¸æ‰‹ã®ã€€") + name;
+        auto msg = name + (english ? " cleared its status effects!" : " ã¯ è‡ªèº«ã®çŠ¶æ…‹ç•°å¸¸ã¨ï¼");
         if(set_battle_text(msg) != 1)
         {
             if(++_frames > get_game_fps())
@@ -487,6 +489,96 @@ int __cdecl skill_refresh(int player, int /*effect_chance*/)
         }
         return 1;
     }
+
+    default:
+        return 0;
+        break;
+    }
+}
+
+int __cdecl skill_spiritdance(int player, int /*effect_chance*/) //Victory Dance from Pokemon (Physical Quiver Dance)
+{
+    auto& skill_state = get_skill_state();
+    switch (skill_state)
+    {
+    case 0:
+        if (!skill_succeeded())
+        {
+            skill_state = 4;
+            return 0;
+        }
+        reset_stat_mod();
+        skill_state = 1;
+        return 1;
+
+    case 1:
+        if (apply_stat_mod(STAT_FOATK, +1, player) == 0)
+        {
+            skill_state = 2;
+            reset_stat_mod();
+        }
+        return 1;
+
+    case 2:
+        if (apply_stat_mod(STAT_FODEF, +1, player) == 0)
+        {
+            skill_state = 3;
+            reset_stat_mod();
+        }
+        return 1;
+
+    case 3:
+        if (apply_stat_mod(STAT_SPEED, +1, player) == 0)
+        {
+            skill_state = 4;
+            return 0;
+        }
+        return 1;
+
+    default:
+        return 0;
+        break;
+    }
+}
+
+int __cdecl skill_hearth(int player, int /*effect_chance*/) //V-Create
+{
+    auto& skill_state = get_skill_state();
+    switch (skill_state)
+    {
+    case 0:
+        if (!skill_succeeded())
+        {
+            skill_state = 4;
+            return 0;
+        }
+        reset_stat_mod();
+        skill_state = 1;
+        return 1;
+
+    case 1:
+        if (apply_stat_mod(STAT_FODEF, -1, player) == 0)
+        {
+            skill_state = 2;
+            reset_stat_mod();
+        }
+        return 1;
+
+    case 2:
+        if (apply_stat_mod(STAT_SPDEF, -1, player) == 0)
+        {
+            skill_state = 3;
+            reset_stat_mod();
+        }
+        return 1;
+
+    case 3:
+        if (apply_stat_mod(STAT_SPEED, -1, player) == 0)
+        {
+            skill_state = 4;
+            return 0;
+        }
+        return 1;
 
     default:
         return 0;
@@ -637,8 +729,8 @@ int __cdecl skill_future(int player, int /*effect_chance*/)
         auto name = std::string(state->active_nickname);
         bool english = tpdp_eng_translation();
         if(player != 0)
-            name = (english ? "Enemy " : "‘Šè‚Ì@") + name;
-        auto msg = name + (english ? " set a bomb!" : " ‚Í ”š’e‚ğ dŠ|‚¯‚½I");
+            name = (english ? "Enemy " : "ç›¸æ‰‹ã®ã€€") + name;
+        auto msg = name + (english ? " set a bomb!" : " ã¯ çˆ†å¼¾ã‚’ ä»•æ›ã‘ãŸï¼");
         if(set_battle_text(msg) != 1)
         {
             if(++_frames > get_game_fps())
@@ -654,7 +746,7 @@ int __cdecl skill_future(int player, int /*effect_chance*/)
     case 2:
     {
         bool english = tpdp_eng_translation();
-        if(set_battle_text(english ? "But the skill failed." : "‚µ‚©‚µ ƒXƒLƒ‹‚Í ¸”s‚µ‚½B") != 1)
+        if(set_battle_text(english ? "But the skill failed." : "ã—ã‹ã— ã‚¹ã‚­ãƒ«ã¯ å¤±æ•—ã—ãŸã€‚") != 1)
         {
             if(++_frames > get_game_fps())
             {
@@ -763,7 +855,7 @@ int __cdecl skill_zephyr(int player, int /*effect_chance*/)
         auto name = std::string(state->active_nickname);
         bool english = tpdp_eng_translation();
         if(player != 0)
-            name = (english ? "Enemy " : "‘Šè‚Ì@") + name;
+            name = (english ? "Enemy " : "ç›¸æ‰‹ã®ã€€") + name;
         auto msg = name + (english ? " cleared the field of hazards!" : " cleared the field of hazards!");
         if(set_battle_text(msg) != 1)
         {
@@ -895,6 +987,20 @@ void init_custom_skills()
         register_custom_skill(g_id_zephyr, &skill_zephyr);
     }
 
+        g_id_spiritdance = IniFile::global.get_uint("skills", "effect_id_spiritdance");
+    if (g_id_refresh != ID_NONE)
+    {
+        init_new_skill(g_id_spiritdance);
+        register_custom_skill(g_id_spiritdance, &skill_spiritdance);
+    }
+
+    g_id_hearth = IniFile::global.get_uint("skills", "effect_id_hearth");
+    if (g_id_refresh != ID_NONE)
+    {
+        init_new_skill(g_id_hearth);
+        register_custom_skill(g_id_hearth, &skill_hearth);
+    }
+
     g_id_verdant_border = IniFile::global.get_uint("skills", "effect_id_verdant_border");
     if (g_id_verdant_border != ID_NONE)
     {
@@ -965,3 +1071,4 @@ void init_custom_skills()
         register_custom_skill(g_id_custom2, &skill_custom2);
     }
 }
+
