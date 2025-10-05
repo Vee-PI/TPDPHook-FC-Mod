@@ -14,8 +14,6 @@
 #include "custom_skills.h"
 #include "misc_hacks.h"
 #include "custom_abilities.h"
-#include "savefile.h"
-#include "archive.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -117,59 +115,6 @@ static std::filesystem::path get_basegame_path()
     return {};
 }
 
-//New event setup
-void patch_folders()
-{
-    libtpdp::Archive arc;
-    try
-    {
-        arc.open(L"dat\\gn_dat1.arc");
-    }
-    catch (libtpdp::ArcError ex)
-    {
-        LOG_ERROR() << L"Could not open gn_dat1.arc: " << ex.what();
-        return;
-    }
-
-    auto ef = arc.get_file("common\\EFile.bin");
-    if (!ef)
-    {
-        LOG_ERROR() << L"Could not read EFile.bin!";
-        return;
-    }
-
-    libtpdp::SaveFile sf;
-    if (!sf.open("save\\enbu_ap.sav", ef.data(), ef.size()))
-    {
-        LOG_ERROR() << L"Could not open save file!";
-        return;
-    }
-
-    if (sf.get_item_quantity(800) > 0)
-    {
-        auto bgm1 = "dat\\BgmData2.csv";
-        auto bgm2 = "%s\\BgmData2.csv";
-        auto bg = "%s\\locationBG2\\%s%d.png";
-        void* addr1 = RVA(0x44120c);
-        void* addr2 = RVA(0x44121c);
-        void* addr3 = RVA(0x43bc50);
-        scan_and_replace(&addr1, &bgm1, sizeof(void*));
-        scan_and_replace(&addr2, &bgm2, sizeof(void*));
-        scan_and_replace(&addr3, &bg, sizeof(void*));
-    }
-
-    IniFile ini("save\\extended.ini");
-    if (ini.get_bool("general", "unlock_puppets"))
-    {
-        auto dd1 = "%s\\DollData2.dbs";
-        auto dd2 = "%s\\%s\\DollData2.dbs";
-        void* addr1 = RVA(0x43aec4);
-        void* addr2 = RVA(0x4414a4);
-        scan_and_replace(&addr1, &dd1, sizeof(void*));
-        scan_and_replace(&addr2, &dd2, sizeof(void*));
-    }
-}
-
 // assign skill function to effect ID
 void register_custom_skill(unsigned int effect_id, SkillCall skill_func)
 {
@@ -180,6 +125,21 @@ void register_custom_skill(unsigned int effect_id, SkillCall skill_func)
 void register_custom_skill_activator(unsigned int effect_id, ActivatorCall activator_func)
 {
     g_effect_tables[2][effect_id] = (uint32_t)activator_func;
+}
+
+static int no_op()
+{
+    return 0;
+}
+
+void register_custom_skill_anim(unsigned int id, VoidCall resource_loader, VoidCall resource_deleter, DrawCall1 draw1, DrawCall2 draw2, TickCall tick)
+{
+    auto noop = (uint32_t)&no_op;
+    g_anim_tables[1][id] = (draw1 != nullptr) ? (uint32_t)draw1 : noop;
+    g_anim_tables[0][id] = (draw2 != nullptr) ? (uint32_t)draw2 : noop;
+    g_anim_tables[2][id] = (tick != nullptr) ? (uint32_t)tick : noop;
+    g_anim_tables[3][id] = (resource_loader != nullptr) ? (uint32_t)resource_loader : noop;
+    g_anim_tables[4][id] = (resource_deleter != nullptr) ? (uint32_t)resource_deleter : noop;
 }
 
 void copy_skill_anim(unsigned int src, unsigned int dest)
@@ -513,8 +473,6 @@ extern "C" __declspec(dllexport) void tpdphook_early_init()
     g_dxhandle_limit = IniFile::global.get_uint("general", "dxhandle_limit_override");
     if (g_dxhandle_limit != ID_NONE)
         scan_and_replace_call(RVA(0x1f80d0), &dxhandlemgr_override);
-
-    patch_folders();
 }
 
 // called immediately in main()
