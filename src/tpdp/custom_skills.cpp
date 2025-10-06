@@ -6,11 +6,15 @@
 #include"../log.h"
 #include "../ini_parser.h"
 #include "../typedefs.h"
+#include "graphics.h"
+#include "audio.h"
 #include <vector>
 #include <utility>
 #include <algorithm>
 #include <gamedata.h>
 #include <ShlObj.h>
+#include <cmath>
+#include <numbers>
 
 // Implementations for custom skills go here.
 // Register skill functions to their effect IDs in init_custom_skills()
@@ -38,6 +42,10 @@ static auto g_id_zephyr = ID_NONE; //ID 879
 static auto g_id_spiritdance = ID_NONE; //ID 887
 static auto g_id_hearth = ID_NONE; //ID 888
 static auto g_id_verdant_border = ID_NONE;
+
+// animations
+static int g_test_anim_handle = 0;
+static unsigned int g_test_anim_frames = 0;
 
 int g_future_turns[2]{};
 
@@ -875,6 +883,50 @@ int __cdecl skill_zephyr(int player, int /*effect_chance*/)
     }
 }
 
+static void test_skill_loader()
+{
+    if(g_test_anim_handle == 0)
+        g_test_anim_handle = LoadGraph("dat\\gn_dat1\\battle\\skillGrEffect\\mindcontrol.png");
+}
+
+static void test_skill_deleter()
+{
+    if(g_test_anim_handle != 0)
+        DeleteSharingGraph(g_test_anim_handle);
+    g_test_anim_handle = 0;
+}
+
+static int test_skill_tick([[maybe_unused]] int player)
+{
+    // animate for 1 second
+    if(g_test_anim_frames++ >= get_game_fps())
+    {
+        g_test_anim_frames = 0;
+        return 0;
+    }
+    return 1;
+}
+
+static void test_skill_anim([[maybe_unused]] int player)
+{
+    // rotate 180 degrees both directions while oscillating on both axes and scaling up and down
+    double t = std::sin((g_test_anim_frames / (double)get_game_fps()) * (std::numbers::pi_v<double> * 2));
+    double angle = t * std::numbers::pi_v<double>;
+    double scale = 1.0 + (t * 0.25);
+    float offset = t * 50.0f;
+    DrawRotaGraphF((960 / 2.0f) + offset, (720 / 2.0f) + offset, scale, angle, g_test_anim_handle, 1, 0);
+
+    // play a sound 10 frames into the animation using dxlib api directly.
+    // volume will be inconsistent for sounds that have not been played through normal means already.
+    if(g_test_anim_frames == 10)
+        PlaySoundMem(get_sfx_handle(3), PlaybackType::BACKGROUND, 1);
+
+    // play another sound using the game's internal queue.
+    // this method should be preferred for sfx.
+    if(g_test_anim_frames == 40)
+        play_sfx(4);
+}
+
 // Bind skill functions to effect ids.
 void init_custom_skills()
 {
@@ -1069,6 +1121,12 @@ void init_custom_skills()
     {
         init_new_skill(g_id_custom2);
         register_custom_skill(g_id_custom2, &skill_custom2);
+    }
+
+    if(IniFile::global.get_bool("skills", "enable_example_animation"))
+    {
+        register_custom_skill_anim(56, test_skill_loader, test_skill_deleter, test_skill_anim, nullptr, test_skill_tick); // yin energy
+        register_custom_skill_anim(58, test_skill_loader, test_skill_deleter, test_skill_anim, nullptr, test_skill_tick); // yang energy
     }
 }
 

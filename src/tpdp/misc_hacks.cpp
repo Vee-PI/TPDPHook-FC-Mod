@@ -7,7 +7,9 @@
 #include "hook_tpdp.h"
 #include "custom_skills.h"
 #include "archive.h"
+#include "savefile.h"
 #include "gamedata.h"
+#include "graphics.h"
 #include "../textconvert.h"
 #include <cassert>
 #include <algorithm>
@@ -71,6 +73,8 @@ static void *g_stealth_return_addr = nullptr;
 static void *g_bind_return_addr = nullptr;
 static void *g_pois_return_addr = nullptr;
 static void *g_sprintf_addr = nullptr;
+static void *g_background_return_addr = nullptr;
+static void *g_background_bgm_return_addr = nullptr;
 //static void *g_music_return_addr = nullptr;
 //static void *g_music_hackreturn_addr = nullptr;
 
@@ -2494,8 +2498,12 @@ void on_event(uint32_t index)
     switch (index)
     {
     case 0x50:
-        abort();
+    {
+        auto ptr = RVA(0xc47234).ptr<uint8_t*>();
+        *ptr = 0;
+        *pnext += 1;
         break;
+    }
 
     case 0x51:
     {
@@ -2587,6 +2595,344 @@ void patch_event_table()
     patch_memory(RVA(0x1742b0 + 2), &max_evt, 1);
 }
 
+// swap strings to force loading of alternate dolldata file
+void swap_dolldata()
+{
+    libtpdp::Archive arc;
+    libtpdp::CSVFile names;
+
+    try
+    {
+        arc.open(L"dat\\gn_dat5.arc");
+    }
+    catch(libtpdp::ArcError ex)
+    {
+        LOG_ERROR() << L"Could not open gn_dat6.arc: " << ex.what();
+        return;
+    }
+
+    {
+        auto f = arc.get_file("name\\DollName.csv");
+        if(!f)
+        {
+            LOG_ERROR() << L"Could not read DollName.csv!";
+            return;
+        }
+        names.parse(f.data(), f.size());
+    }
+    arc.close();
+
+    try
+    {
+        arc.open(L"dat\\gn_dat6.arc");
+    }
+    catch(libtpdp::ArcError ex)
+    {
+        LOG_ERROR() << L"Could not open gn_dat6.arc: " << ex.what();
+        return;
+    }
+
+    // swap strings referencing DollData.dbs to DollData2.dbs
+    auto dd1 = "%s\\DollData2.dbs";
+    auto dd2 = "%s\\%s\\DollData2.dbs";
+    void *addr1 = RVA(0x43aec4);
+    void *addr2 = RVA(0x4414a4);
+    IniFile ini("save\\extended.ini");
+    if(ini.get_bool("general", "unlock_puppets"))
+    {
+        // directly overwrite the memory buffer since it won't get reloaded without a hard reboot
+        auto dd = arc.get_file("doll\\DollData2.dbs");
+        if(!dd)
+        {
+            LOG_ERROR() << L"Could not read DollData2.dbs!";
+            return;
+        }
+        else
+        {
+            auto ptr = get_puppet_data();
+            memcpy(ptr, dd.data(), dd.size());
+        }
+
+        // swap original strings for new ones
+        scan_and_replace(&addr1, &dd1, sizeof(void*));
+        scan_and_replace(&addr2, &dd2, sizeof(void*));
+    }
+    else
+    {
+        // directly overwrite the memory buffer since it won't get reloaded without a hard reboot
+        auto dd = arc.get_file("doll\\DollData.dbs");
+        if(!dd)
+        {
+            LOG_ERROR() << L"Could not read DollData.dbs!";
+            return;
+        }
+        else
+        {
+            auto ptr = get_puppet_data();
+            memcpy(ptr, dd.data(), dd.size());
+        }
+
+        // swap the original strings back in if previously swapped
+        scan_and_replace(&dd1, &addr1, sizeof(void*));
+        scan_and_replace(&dd2, &addr2, sizeof(void*));
+    }
+
+    // parse puppet names and write them to the name field in the DollData binary
+    auto data = get_puppet_data();
+    for(size_t i = 0; i < names.num_lines(); ++i)
+    {
+        if(i >= 512)
+            break;
+        auto& entry = names[i];
+        if(entry.size() > 0)
+        {
+            auto str = utf_to_sjis(entry[0]);
+            memcpy(&data[i].field_0x0, str.c_str(), std::min(str.size(), 31u));
+            data[i].field_0x0[std::min(str.size(), 31u)] = 0; // null terminate
+        }
+    }
+}
+
+void load_background()
+{
+    libtpdp::Archive arc;
+    libtpdp::CSVFile names;
+    auto buf = RVA(0x93c188).ptr<uint32_t*>();
+    auto id = *RVA(0x93bcd7).ptr<uint8_t*>();
+
+    try
+    {
+        arc.open(L"dat\\gn_dat5.arc");
+    }
+    catch(libtpdp::ArcError ex)
+    {
+        LOG_ERROR() << L"Could not open gn_dat6.arc: " << ex.what();
+        return;
+    }
+
+    {
+        auto f = arc.get_file("name\\MapLocationName.csv");
+        if(!f)
+        {
+            LOG_ERROR() << L"Could not read MapLocationName.csv!";
+            return;
+        }
+        names.parse(f.data(), f.size());
+    }
+    arc.close();
+
+    try
+    {
+        arc.open(L"dat\\gn_dat1.arc");
+    }
+    catch(libtpdp::ArcError ex)
+    {
+        LOG_ERROR() << L"Could not open gn_dat1.arc: " << ex.what();
+        return;
+    }
+
+    if(id >= names.num_lines())
+        return;
+    auto& entry = names[id];
+    if(entry.size() < 2)
+        return;
+    auto basename = utf_to_sjis(entry[1]);
+    for(size_t i = 0; i < 16; ++i)
+    {
+        if(buf[i] == 0)
+        {
+            auto filepath = "battle\\locationBG\\" + basename + std::to_string(i) + ".png";
+            if(arc.find(filepath) != arc.end()) // check for file existence
+            {
+                filepath = "dat\\gn_dat1\\" + filepath;
+                buf[i] = LoadGraph(filepath.c_str());
+            }
+        }
+    }
+}
+
+__declspec(naked)
+static void _load_background()
+{
+    __asm
+    {
+        pushad
+        pushfd
+        push ebp
+        mov ebp, esp
+        sub esp, __LOCAL_SIZE
+    }
+
+    {
+        load_background();
+    }
+
+    __asm
+    {
+        mov esp, ebp
+        pop ebp
+        popfd
+        popad
+        jmp g_background_return_addr
+    }
+}
+
+void on_main_loop(uint32_t index)
+{
+    switch(index)
+    {
+    case 0:
+        swap_dolldata();
+        break;
+
+    default:
+        return;
+    }
+}
+
+__declspec(naked)
+void do_main_loop()
+{
+    uint32_t index;
+    __asm
+    {
+        pushad
+        pushfd
+        push ebp
+        mov ebp, esp
+        sub esp, __LOCAL_SIZE
+        mov index, eax
+    }
+
+    static void* jmpaddr = nullptr;
+    {
+        jmpaddr = RVA(0x1afa28).ptr<void**>()[index];
+        on_main_loop(index);
+    }
+
+    __asm
+    {
+        mov esp, ebp
+        pop ebp
+        popfd
+        popad
+        jmp jmpaddr
+    }
+}
+
+void patch_main_loop()
+{
+    patch_jump(RVA(0x1af855), &do_main_loop);
+}
+
+void do_backgrounds()
+{
+    auto func = RVA(0x24aa0).ptr<VoidCall>();
+    auto id = *RVA(0x93bcd7).ptr<uint8_t*>();
+    auto draw_handles = RVA(0x93c0e0).ptr<uint32_t*>(); // uint32_t[16] (?) handles to be drawn this frame
+    auto sprite_handles = RVA(0x93c188).ptr<uint32_t*>(); // uint32_t[16] handles for all sprites allocated for this background
+
+    switch(id)
+    {
+    default:
+        func();
+        break;
+    }
+}
+
+static void do_background_bgm()
+{
+    auto background_id = *RVA(0xc5996a).ptr<uint8_t*>();
+    auto bgm_id_ptr = RVA(0xc57871).ptr<uint8_t*>();
+
+    switch(background_id)
+    {
+        // vanilla backgrounds
+    case 3:
+    case 0xf:
+    case 0x19:
+    case 0x29:
+    case 0x33:
+    case 0x34:
+    case 0x35:
+        *bgm_id_ptr = 0x5c;
+        break;
+    case 4:
+    case 9:
+    case 0xd:
+    case 0x13:
+    case 0x1a:
+    case 0x1b:
+    case 0x1c:
+    case 0x1d:
+        *bgm_id_ptr = 0x5d;
+        break;
+    case 5:
+    case 0x14:
+    case 0x15:
+    case 0x16:
+    case 0x17:
+    case 0x18:
+    case 0x24:
+        *bgm_id_ptr = 0x5e;
+        break;
+    default:
+        *bgm_id_ptr = 0x50;
+        break;
+    case 0x11:
+    case 0x2e:
+    case 0x3a:
+        *bgm_id_ptr = 0x62;
+        break;
+    case 0x2c:
+    case 0x2d:
+    case 0x39:
+    case 0x3b:
+    case 0x3c:
+        *bgm_id_ptr = 0x47;
+        break;
+
+        // custom entries begin here
+    case 0x3d:
+        *bgm_id_ptr = 0x40;
+        break;
+    }
+}
+
+__declspec(naked)
+static void _do_background_bgm()
+{
+    __asm
+    {
+        pushad
+        pushfd
+        push ebp
+        mov ebp, esp
+        sub esp, __LOCAL_SIZE
+    }
+
+    {
+        do_background_bgm();
+    }
+
+    __asm
+    {
+        mov esp, ebp
+        pop ebp
+        popfd
+        popad
+        jmp g_background_bgm_return_addr
+    }
+}
+
+void patch_backgrounds()
+{
+    g_background_return_addr = RVA(0x19bbc).ptr<void*>();
+    g_background_bgm_return_addr = RVA(0x175fbe).ptr<void*>();
+    patch_call(RVA(0x2528b), &do_backgrounds);
+    patch_jump(RVA(0x19ab0), &_load_background);
+    patch_jump(RVA(0x175f77), &_do_background_bgm);
+}
 
 // initialization
 void init_misc_hacks()
@@ -2606,6 +2952,12 @@ void init_misc_hacks()
 
     // hook into event table
     patch_event_table();
+
+    // hook into main loop
+    patch_main_loop();
+
+    // hook background rendering
+    patch_backgrounds();
 
     // bgm limit
     if(IniFile::global.get_bool("general", "extra_music_hack"))
