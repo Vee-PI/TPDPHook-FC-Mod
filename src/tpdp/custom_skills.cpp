@@ -262,13 +262,13 @@ int __cdecl skill_verdant_border(int player, int /*effect_chance*/)
     case 1:
     {
         constexpr auto enheal = " has deployed\\nits border!";
-        constexpr auto jpheal = "ã¯çµç•Œã‚’å±•é–‹ã—ãŸï¼";
+        constexpr auto jpheal = "‚ÍŒ‹ŠE‚ğ“WŠJ‚µ‚½I";
         auto name = std::string(state->active_nickname);
         bool english = tpdp_eng_translation();
         auto enmsg = enheal;
         auto jpmsg = jpheal;
         if (player == 1)
-            name = (english ? "Enemy " : "ç›¸æ‰‹ã®ã€€") + name;
+            name = (english ? "Enemy " : "‘Šè‚Ì@") + name;
         if (set_battle_text(name + (english ? enmsg : jpmsg)) != 1)
         {
             if (++_frames > get_game_fps())
@@ -436,8 +436,8 @@ int __cdecl skill_tabula(int player, int /*effect_chance*/)
         auto name = std::string(otherstate->active_nickname);
         bool english = tpdp_eng_translation();
         if (player == 0)
-            name = (english ? "Enemy " : "ç›¸æ‰‹ã®ã€€") + name;
-        if (set_battle_text(name + (english ? " has become a Void type!" : " ã¯ è‡ªèº«ã®çŠ¶æ…‹ç•°å¸¸ã¨ï¼")) != 1)
+            name = (english ? "Enemy " : "‘Šè‚Ì@") + name;
+        if (set_battle_text(name + (english ? " has become a Void type!" : " ‚Í ©g‚Ìó‘ÔˆÙí‚ÆI")) != 1)
         {
             if (++_frames > get_game_fps())
             {
@@ -484,8 +484,8 @@ int __cdecl skill_refresh(int player, int /*effect_chance*/)
         auto name = std::string(state->active_nickname);
         bool english = tpdp_eng_translation();
         if(player != 0)
-            name = (english ? "Enemy " : "ç›¸æ‰‹ã®ã€€") + name;
-        auto msg = name + (english ? " cleared its status effects!" : " ã¯ è‡ªèº«ã®çŠ¶æ…‹ç•°å¸¸ã¨ï¼");
+            name = (english ? "Enemy " : "‘Šè‚Ì@") + name;
+        auto msg = name + (english ? " cleared its status effects!" : " ‚Í ©g‚Ìó‘ÔˆÙí‚ÆI");
         if(set_battle_text(msg) != 1)
         {
             if(++_frames > get_game_fps())
@@ -737,8 +737,8 @@ int __cdecl skill_future(int player, int /*effect_chance*/)
         auto name = std::string(state->active_nickname);
         bool english = tpdp_eng_translation();
         if(player != 0)
-            name = (english ? "Enemy " : "ç›¸æ‰‹ã®ã€€") + name;
-        auto msg = name + (english ? " set a bomb!" : " ã¯ çˆ†å¼¾ã‚’ ä»•æ›ã‘ãŸï¼");
+            name = (english ? "Enemy " : "‘Šè‚Ì@") + name;
+        auto msg = name + (english ? " set a bomb!" : " ‚Í ”š’e‚ğ dŠ|‚¯‚½I");
         if(set_battle_text(msg) != 1)
         {
             if(++_frames > get_game_fps())
@@ -754,7 +754,7 @@ int __cdecl skill_future(int player, int /*effect_chance*/)
     case 2:
     {
         bool english = tpdp_eng_translation();
-        if(set_battle_text(english ? "But the skill failed." : "ã—ã‹ã— ã‚¹ã‚­ãƒ«ã¯ å¤±æ•—ã—ãŸã€‚") != 1)
+        if(set_battle_text(english ? "But the skill failed." : "‚µ‚©‚µ ƒXƒLƒ‹‚Í ¸”s‚µ‚½B") != 1)
         {
             if(++_frames > get_game_fps())
             {
@@ -863,7 +863,7 @@ int __cdecl skill_zephyr(int player, int /*effect_chance*/)
         auto name = std::string(state->active_nickname);
         bool english = tpdp_eng_translation();
         if(player != 0)
-            name = (english ? "Enemy " : "ç›¸æ‰‹ã®ã€€") + name;
+            name = (english ? "Enemy " : "‘Šè‚Ì@") + name;
         auto msg = name + (english ? " cleared the field of hazards!" : " cleared the field of hazards!");
         if(set_battle_text(msg) != 1)
         {
