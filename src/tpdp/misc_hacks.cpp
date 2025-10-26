@@ -75,6 +75,7 @@ static void *g_pois_return_addr = nullptr;
 static void *g_sprintf_addr = nullptr;
 static void *g_background_return_addr = nullptr;
 static void *g_background_bgm_return_addr = nullptr;
+static void *g_box_icon_return_addr = nullptr;
 //static void *g_music_return_addr = nullptr;
 //static void *g_music_hackreturn_addr = nullptr;
 
@@ -168,6 +169,12 @@ static std::unique_ptr<uint8_t[]> g_music_loop_buf;
 
 static std::unique_ptr<uint8_t[]> g_player_level_cap = std::make_unique<uint8_t[]>(0x198 * 5);
 static std::unique_ptr<uint8_t[]> g_ai_level_cap = std::make_unique<uint8_t[]>(0x198 * 5);
+
+static constexpr size_t DOLLICON_WIDTH = 0x10;
+static constexpr size_t DOLLICON_HEIGHT = 0x20;
+static constexpr size_t DOLLICON_COUNT = 0x200;
+static std::unique_ptr<uint32_t[]> g_dollicon_handle_buf = std::make_unique<uint32_t[]>(DOLLICON_COUNT + 1); // not sure if +1 necessary
+static std::unique_ptr<uint32_t[]> g_mark_handle_buf = std::make_unique<uint32_t[]>(6 + 1);
 
 std::once_flag g_music_init;
 
@@ -2934,6 +2941,118 @@ void patch_backgrounds()
     patch_jump(RVA(0x175f77), &_do_background_bgm);
 }
 
+static void patch_dollicon()
+{
+    void *ptr = RVA(0x974328);
+    void *newptr = g_dollicon_handle_buf.get();
+    scan_and_replace(&ptr, &newptr,sizeof(ptr)); // swap references to original handle buffer with our larger one
+    uint8_t width = DOLLICON_WIDTH;
+    uint8_t height = DOLLICON_HEIGHT;
+    uint32_t count = DOLLICON_COUNT;
+    patch_memory(RVA(0x1afb3d + 1) /* push imm8 */, &height, sizeof(height));
+    patch_memory(RVA(0x1afb3f + 1) /* push imm8 */, &width, sizeof(width));
+    patch_memory(RVA(0x1afb41 + 1) /* push imm32 */, &count, sizeof(count));
+}
+
+// this is wedged into the middle of the function that draws the puppet box
+// so that we can draw icons on top of the doll icons but below other UI elements
+// like the cursor
+static void draw_box_icons()
+{
+    auto data = get_puppet_data();
+    auto styleicons = RVA(0xc4714c).ptr<uint32_t*>();
+    auto xpos = RVA(0x9538d0).ptr<float*>();
+    auto party_puppets = RVA(0x4ea988).ptr<PartyPuppet**>();
+
+    // party puppets
+    for(size_t i = 0; i < 6; ++i)
+    {
+        if(party_puppets[i] == nullptr)
+            continue;
+        PartyPuppet puppet{};
+        memcpy(&puppet, party_puppets[i], libtpdp::PUPPET_SIZE); // unknown struct length, copy minimum amount of data
+        decrypt_puppet_nocopy(&puppet);
+        auto offset = (int)xpos[i]; // unclear what this is for but original code uses it
+        int x = offset + 32 + (i * 36);
+        int y = 49;
+        DrawGraph(x, y, styleicons[data[puppet.puppet_id].styles[puppet.style_index & 3].style_type], 1);
+        DrawGraph(x, y + 10, g_mark_handle_buf[puppet.mark], 1);
+    }
+
+    // box puppets
+    for(size_t i = 0; i < 30; ++i)
+    {
+        auto buf = RVA(0xc60b88).ptr<uint8_t*>();
+        PartyPuppet puppet{};
+        memcpy(&puppet, &buf[i * libtpdp::PUPPET_SIZE_PARTY], libtpdp::PUPPET_SIZE_PARTY); // shorter than PartyPuppet
+        decrypt_puppet_nocopy(&puppet);
+        auto offset = (int)*RVA(0x953950).ptr<float*>(); // for sliding animation when switching boxes
+        int x = offset + 32 + ((i % 6) * 36);
+        int y = ((i / 6) * 40) + 118;
+        DrawGraph(x, y, styleicons[data[puppet.puppet_id].styles[puppet.style_index & 3].style_type], 1);
+        DrawGraph(x, y + 10, g_mark_handle_buf[puppet.mark], 1);
+    }
+}
+
+__declspec(naked)
+static void _draw_box_icons()
+{
+    __asm
+    {
+        pushad
+        pushfd
+        push ebp
+        mov ebp, esp
+        sub esp, __LOCAL_SIZE
+    }
+
+    {
+        // replacement code for the hook site
+        if(*RVA(0x9537e9).ptr<uint8_t*>() == 1)
+        {
+            auto func = RVA(0x1c5e80).ptr<int(__cdecl*)(int, int)>();
+            func(0x11, 0xff);
+        }
+
+        // called after puppet sprites are drawn
+        draw_box_icons();
+    }
+
+    __asm
+    {
+        mov esp, ebp
+        pop ebp
+        popfd
+        popad
+        jmp g_box_icon_return_addr
+    }
+}
+
+// load extra resources from dat1/common/graphic
+static void load_common_graphics()
+{
+    auto func = RVA(0x1afb00).ptr<VoidCall>();
+    func();
+
+    if(g_mark_handle_buf[0] == (uint32_t)-1)
+        LoadDivGraph("dat\\gn_dat1\\common\\graphic\\mark.png", 6, 1, 6, 8, 8, (int*)g_mark_handle_buf.get());
+}
+
+static void patch_box_icons()
+{
+    for(auto i = 0; i < 6; ++i)
+        g_mark_handle_buf[i] = (uint32_t)-1;
+    g_box_icon_return_addr = RVA(0x15504b);
+
+    // too early to load sprites directly, so we will hook
+    // the function that loads dat1 sprites
+    patch_call(RVA(0x1af872), load_common_graphics);
+
+    // we hook this location because it's convenient to draw on top of
+    // puppet sprites but under other UI elements
+    patch_jump(RVA(0x155033), _draw_box_icons);
+}
+
 // initialization
 void init_misc_hacks()
 {
@@ -2971,6 +3090,12 @@ void init_misc_hacks()
 
     if(IniFile::global.get_bool("general", "disable_update_check"))
         patch_call(RVA(0x17e409), &get_newest_version);
+
+    if(IniFile::global.get_bool("general", "extend_dollicon_limit"))
+        patch_dollicon();
+
+    if(IniFile::global.get_bool("general", "puppet_box_info_icons"))
+        patch_box_icons();
 
     // change alt-color text in the costume shop
     if(tpdp_eng_translation())
