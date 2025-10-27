@@ -75,6 +75,7 @@ static void *g_pois_return_addr = nullptr;
 static void *g_sprintf_addr = nullptr;
 static void *g_background_return_addr = nullptr;
 static void *g_background_bgm_return_addr = nullptr;
+static void *g_box_icon_return_addr = nullptr;
 //static void *g_music_return_addr = nullptr;
 //static void *g_music_hackreturn_addr = nullptr;
 
@@ -90,6 +91,14 @@ static auto g_id_byakko_seed = ID_NONE;
 static auto g_id_suzaku_seed = ID_NONE;
 static auto g_id_resheal = ID_NONE;
 static auto g_id_feast = ID_NONE;
+static auto g_id_prismatic = ID_NONE; //ID 665
+static auto g_id_mending = ID_NONE; //ID 666 mod=0.5, All charms including this and below do not function (Hold 1 Items)
+//static auto g_id_suncharm = ID_NONE; //ID 667 | Aurora, SpDef
+//static auto g_id_mooncharm = ID_NONE; //ID 668 | Fog, FoDef
+//static auto g_id_landcharm = ID_NONE; //ID 669 | Dust Storm, FoAtk
+//static auto g_id_skycharm = ID_NONE; //ID 670 | Calm, SpAtk
+//static auto g_id_spectrumcharm = ID_NONE; //ID 671 | Sunshower, Speed
+
 
 // item mods
 static auto g_mod_wyrmprint_high = 1.4;
@@ -102,6 +111,8 @@ static auto g_mod_suzaku_seed = 1.0 / 8.0;
 static auto g_mod_resheal = 1.0 / 8.0;
 static auto g_power_giant_bit = 120u;
 static auto g_mod_feast = 1.0 / 3.0;
+static auto g_mod_prismatic = 1.15;
+static auto g_mod_mending = 0.5;
 
 // ability IDs
 static auto g_id_stacking = ID_NONE;
@@ -152,6 +163,10 @@ static double g_mod_blitzkrieg = 2.0;
 static auto g_id_future_skill = ID_NONE;
 static bool g_patch_miracle = false;
 static bool g_macroburst_acc_boost = false;
+static auto g_id_arrow = ID_NONE;
+static double g_mod_arrow = 2.0;
+static auto g_id_eclipse = ID_NONE;
+static double g_mod_eclipse = 2.0;
 
 WishState g_wish_state[2];
 
@@ -168,6 +183,12 @@ static std::unique_ptr<uint8_t[]> g_music_loop_buf;
 
 static std::unique_ptr<uint8_t[]> g_player_level_cap = std::make_unique<uint8_t[]>(0x198 * 5);
 static std::unique_ptr<uint8_t[]> g_ai_level_cap = std::make_unique<uint8_t[]>(0x198 * 5);
+
+static constexpr size_t DOLLICON_WIDTH = 0x10;
+static constexpr size_t DOLLICON_HEIGHT = 0x20;
+static constexpr size_t DOLLICON_COUNT = 0x200;
+static std::unique_ptr<uint32_t[]> g_dollicon_handle_buf = std::make_unique<uint32_t[]>(DOLLICON_COUNT + 1); // not sure if +1 necessary
+static std::unique_ptr<uint32_t[]> g_mark_handle_buf = std::make_unique<uint32_t[]>(6 + 1);
 
 std::once_flag g_music_init;
 
@@ -357,6 +378,17 @@ uint do_dmg_calc(BattleState *state, BattleState *otherstate, int player, [[mayb
         if(boost)
             dmg *= g_mod_drum;
     }
+    else if ((puppet.held_item == g_id_prismatic) && can_use_items(state)) // Prismatic Hairpin
+    {
+        auto type1 = state->active_type1;
+        auto type2 = state->active_type2;
+        auto data = get_skill_data();
+        auto curskill = (skill_id != 0) ? skill_id : state->active_skill_id;
+        {
+            if ((data[curskill].element == type1) || (data[curskill].element == type2))
+                dmg *= g_mod_prismatic;
+        }
+    }
     else if((puppet.held_item == g_id_seiryu_seed) && (get_terrain_state()->terrain_type == TERRAIN_SEIRYU) && can_use_items(state))
     {
         dmg *= g_mod_seiryu_seed; // Yggdrasil Seed
@@ -527,6 +559,12 @@ SkillData *__fastcall do_adjusted_skill_data(int player, ushort skill_id)
     if ((data->effect_id == g_id_blitzkrieg) && ((state->turn_order == 0) || (otherstate->num_turns == 0)))
         data->power = (byte)std::clamp((double)data->power * g_mod_blitzkrieg, 0.0, 255.0);
 
+    else if ((data->effect_id == g_id_arrow) && ((terrain_state->weather_type == WEATHER_HEAVYFOG) && (terrain_state->weather_duration > 0) && ((uint)otherstate->active_ability != 117)) && ((uint)state->active_ability != 117))
+        data->power = (byte)std::clamp((double)data->power * g_mod_arrow, 0.0, 255.0);
+
+    else if ((data->effect_id == g_id_eclipse) && ((terrain_state->weather_type == WEATHER_AURORA) && (terrain_state->weather_duration > 0) && ((uint)otherstate->active_ability != 117)) && ((uint)state->active_ability != 117))
+        data->power = (byte)std::clamp((double)data->power * g_mod_eclipse, 0.0, 255.0);
+
     if(((uint)state->active_ability == g_id_light_wings) && (basedata.element == ELEMENT_LIGHT))
     {
         if((data->priority < 6) && ((uint)otherstate->active_ability != 341)) // Grand Opening
@@ -537,6 +575,7 @@ SkillData *__fastcall do_adjusted_skill_data(int player, ushort skill_id)
         if ((data->priority < 6) && ((uint)otherstate->active_ability != 341)) // Water Opening
             data->priority += 1;
     }
+
 
     // macroburst
     if(g_macroburst_acc_boost && (curskill == 359))
@@ -851,6 +890,103 @@ static bool verdant_heal(int player)
     }
 }
 
+//figy berry/mending charm testing
+static bool mending_heal(int player)
+{
+    auto state = get_battle_state(player);
+    auto otherstate = get_battle_state(!player);
+    static int _state = 0;
+    static int _frames = 0;
+
+    if(state->active_puppet == nullptr)
+    {
+        _state = 0;
+        _frames = 0;
+        return false;
+    }
+    auto puppet = decrypt_puppet(state->active_puppet);
+
+    switch(_state)
+    {
+    case 0:
+        if((puppet.hp > 0) && (puppet.hp <= (calculate_stat(STAT_HP, &puppet) / 4u)))
+        {
+            for(auto i : puppet.status_effects)
+            {
+                if((i == STATUS_WEAK) || (i == STATUS_HVYWEAK))
+                    return false;
+            }
+
+            reset_item_consume(player);
+            _state = 1;
+            return true;
+        }
+        return false;
+
+    case 1:
+        if(show_item_consume() == 0)
+            _state = 2;
+        return true;
+
+    case 2:
+    {
+        auto tstate = get_terrain_state();
+        auto max_hp = (double)calculate_stat(STAT_HP, &puppet);
+
+        if(tstate->terrain_type == TERRAIN_SUZAKU)
+        {
+            state->active_puppet->hp = (ushort)std::max(puppet.hp - std::max(max_hp * g_mod_mending * 0.5, 1.0), 0.0);
+        }
+        else
+        {
+            state->active_puppet->hp = (ushort)std::min(puppet.hp + std::max(max_hp * g_mod_mending, 1.0), max_hp);
+        }
+
+        reset_heal_anim(player);
+        _state = 3;
+        return true;
+    }
+
+    case 3:
+        if(do_heal_anim() == 0)
+            _state = 4;
+        return true;
+
+    case 4:
+    {
+        constexpr auto enheal = " feels healthier due\\nto the border!";
+        constexpr auto jpheal = "は結界の効果で元気になった！";
+        constexpr auto endrain = " has lost HP due to Suzaku!";
+        constexpr auto jpdrain = "は 朱雀に\\n体力を 奪われた……";
+        auto name = std::string(state->active_nickname);
+        bool english = tpdp_eng_translation();
+        bool drain = get_terrain_state()->terrain_type == TERRAIN_SUZAKU;
+        auto enmsg = drain ? endrain : enheal;
+        auto jpmsg = drain ? jpdrain : jpheal;
+        if(player == 1)
+            name = (english ? "Enemy " : "相手の　") + name;
+        if(set_battle_text(name + (english ? enmsg : jpmsg)) != 1)
+        {
+            if(++_frames > get_game_fps())
+            {
+                _frames = 0;
+                _state = 0;
+                *state->consumed_item_ptr = puppet.held_item;
+                puppet.held_item = 0;
+                *state->active_puppet = encrypt_puppet(&puppet);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    default:
+        _frames = 0;
+        _state = 0;
+        return false;
+    }
+}
+
 static bool do_future(int player)
 {
     static int _state = 0;
@@ -964,6 +1100,12 @@ static bool do_item(int player)
 
     case 4:
         if ((g_id_future_skill != ID_NONE) && do_future(player))
+            return true;
+        _state = 5;
+        return true;
+
+    case 5:
+        if((puppet.held_item == g_id_mending) && can_use_items(state) && (state->active_ability != 252) && (otherstate->active_ability != 252) && mending_heal(player))
             return true;
         _state = 0;
         return false;
@@ -2934,6 +3076,118 @@ void patch_backgrounds()
     patch_jump(RVA(0x175f77), &_do_background_bgm);
 }
 
+static void patch_dollicon()
+{
+    void *ptr = RVA(0x974328);
+    void *newptr = g_dollicon_handle_buf.get();
+    scan_and_replace(&ptr, &newptr,sizeof(ptr)); // swap references to original handle buffer with our larger one
+    uint8_t width = DOLLICON_WIDTH;
+    uint8_t height = DOLLICON_HEIGHT;
+    uint32_t count = DOLLICON_COUNT;
+    patch_memory(RVA(0x1afb3d + 1) /* push imm8 */, &height, sizeof(height));
+    patch_memory(RVA(0x1afb3f + 1) /* push imm8 */, &width, sizeof(width));
+    patch_memory(RVA(0x1afb41 + 1) /* push imm32 */, &count, sizeof(count));
+}
+
+// this is wedged into the middle of the function that draws the puppet box
+// so that we can draw icons on top of the doll icons but below other UI elements
+// like the cursor
+static void draw_box_icons()
+{
+    auto data = get_puppet_data();
+    auto styleicons = RVA(0xc4714c).ptr<uint32_t*>();
+    auto xpos = RVA(0x9538d0).ptr<float*>();
+    auto party_puppets = RVA(0x4ea988).ptr<PartyPuppet**>();
+
+    // party puppets
+    for(size_t i = 0; i < 6; ++i)
+    {
+        if(party_puppets[i] == nullptr)
+            continue;
+        PartyPuppet puppet{};
+        memcpy(&puppet, party_puppets[i], libtpdp::PUPPET_SIZE); // unknown struct length, copy minimum amount of data
+        decrypt_puppet_nocopy(&puppet);
+        auto offset = (int)xpos[i]; // unclear what this is for but original code uses it
+        int x = offset + 32 + (i * 36);
+        int y = 49;
+        DrawGraph(x, y, styleicons[data[puppet.puppet_id].styles[puppet.style_index & 3].style_type], 1);
+        DrawGraph(x, y + 10, g_mark_handle_buf[puppet.mark], 1);
+    }
+
+    // box puppets
+    for(size_t i = 0; i < 30; ++i)
+    {
+        auto buf = RVA(0xc60b88).ptr<uint8_t*>();
+        PartyPuppet puppet{};
+        memcpy(&puppet, &buf[i * libtpdp::PUPPET_SIZE_PARTY], libtpdp::PUPPET_SIZE_PARTY); // shorter than PartyPuppet
+        decrypt_puppet_nocopy(&puppet);
+        auto offset = (int)*RVA(0x953950).ptr<float*>(); // for sliding animation when switching boxes
+        int x = offset + 32 + ((i % 6) * 36);
+        int y = ((i / 6) * 40) + 118;
+        DrawGraph(x, y, styleicons[data[puppet.puppet_id].styles[puppet.style_index & 3].style_type], 1);
+        DrawGraph(x, y + 10, g_mark_handle_buf[puppet.mark], 1);
+    }
+}
+
+__declspec(naked)
+static void _draw_box_icons()
+{
+    __asm
+    {
+        pushad
+        pushfd
+        push ebp
+        mov ebp, esp
+        sub esp, __LOCAL_SIZE
+    }
+
+    {
+        // replacement code for the hook site
+        if(*RVA(0x9537e9).ptr<uint8_t*>() == 1)
+        {
+            auto func = RVA(0x1c5e80).ptr<int(__cdecl*)(int, int)>();
+            func(0x11, 0xff);
+        }
+
+        // called after puppet sprites are drawn
+        draw_box_icons();
+    }
+
+    __asm
+    {
+        mov esp, ebp
+        pop ebp
+        popfd
+        popad
+        jmp g_box_icon_return_addr
+    }
+}
+
+// load extra resources from dat1/common/graphic
+static void load_common_graphics()
+{
+    auto func = RVA(0x1afb00).ptr<VoidCall>();
+    func();
+
+    if(g_mark_handle_buf[0] == (uint32_t)-1)
+        LoadDivGraph("dat\\gn_dat1\\common\\graphic\\mark.png", 6, 1, 6, 8, 8, (int*)g_mark_handle_buf.get());
+}
+
+static void patch_box_icons()
+{
+    for(auto i = 0; i < 6; ++i)
+        g_mark_handle_buf[i] = (uint32_t)-1;
+    g_box_icon_return_addr = RVA(0x15504b);
+
+    // too early to load sprites directly, so we will hook
+    // the function that loads dat1 sprites
+    patch_call(RVA(0x1af872), load_common_graphics);
+
+    // we hook this location because it's convenient to draw on top of
+    // puppet sprites but under other UI elements
+    patch_jump(RVA(0x155033), _draw_box_icons);
+}
+
 // initialization
 void init_misc_hacks()
 {
@@ -2971,6 +3225,12 @@ void init_misc_hacks()
 
     if(IniFile::global.get_bool("general", "disable_update_check"))
         patch_call(RVA(0x17e409), &get_newest_version);
+
+    if(IniFile::global.get_bool("general", "extend_dollicon_limit"))
+        patch_dollicon();
+
+    if(IniFile::global.get_bool("general", "puppet_box_info_icons"))
+        patch_box_icons();
 
     // change alt-color text in the costume shop
     if(tpdp_eng_translation())
@@ -3021,6 +3281,8 @@ void init_misc_hacks()
     g_id_suzaku_seed = IniFile::global.get_uint("items", "id_suzaku_seed");
     g_id_giant_bit = IniFile::global.get_uint("items", "id_giant_bit");
     g_id_resheal = IniFile::global.get_uint("items", "id_resheal");
+    g_id_prismatic = IniFile::global.get_uint("items", "id_prismatic"); //NEW
+    g_id_mending = IniFile::global.get_uint("items", "id_mending"); //NEW
 
     // config item mods
     g_mod_wyrmprint_high = IniFile::global.get_double("items", "mod_wyrmprint_high", g_mod_wyrmprint_high);
@@ -3032,6 +3294,9 @@ void init_misc_hacks()
     g_mod_suzaku_seed = IniFile::global.get_double("items", "mod_suzaku_seed", g_mod_suzaku_seed);
     g_mod_resheal = IniFile::global.get_double("items", "mod_resheal", g_mod_resheal);
     g_power_giant_bit = IniFile::global.get_uint("items", "giant_bit_power", g_power_giant_bit);
+    g_mod_prismatic = IniFile::global.get_double("items", "mod_prismatic", g_mod_prismatic); //NEW
+    g_mod_mending = IniFile::global.get_double("items", "mod_mending", g_mod_mending); //NEW
+
 
     // config ability IDs
     g_id_stacking = IniFile::global.get_uint("abilities", "id_stacking");
@@ -3080,6 +3345,10 @@ void init_misc_hacks()
     g_id_blitzkrieg = IniFile::global.get_uint("skills", "effect_id_blitzkrieg");
     g_mod_blitzkrieg = IniFile::global.get_double("skills", "mod_blitzkrieg", g_mod_blitzkrieg);
     g_id_future_skill = IniFile::global.get_uint("skills", "skill_id_future");
+    g_id_arrow = IniFile::global.get_uint("skills", "effect_id_arrow"); 
+    g_mod_arrow = IniFile::global.get_double("skills", "mod_arrow", g_mod_arrow); 
+    g_id_eclipse = IniFile::global.get_uint("skills", "effect_id_eclipse"); 
+    g_mod_eclipse = IniFile::global.get_double("skills", "mod_eclipse", g_mod_eclipse); 
 
     if(g_id_boots != ID_NONE)
         patch_boots();
