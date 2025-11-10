@@ -50,3 +50,8 @@ int DrawRotaGraphF(float xf, float yf, double ExRate, double Angle, int GrHandle
 {
     return RVA(0x1cd890).ptr<int(__cdecl*)(float, float, double, double, int, int, int)>()(xf, yf, ExRate, Angle, GrHandle, TransFlag, TurnFlag);
 }
+
+int SetDrawBlendMode(int BlendMode, int BlendParam)
+{
+    return RVA(0x1c5e80).ptr<int(__cdecl*)(int, int)>()(BlendMode, BlendParam);
+}

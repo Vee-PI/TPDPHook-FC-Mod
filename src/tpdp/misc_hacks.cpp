@@ -187,12 +187,28 @@ static std::unique_ptr<uint8_t[]> g_ai_level_cap = std::make_unique<uint8_t[]>(0
 static constexpr size_t DOLLICON_WIDTH = 0x10;
 static constexpr size_t DOLLICON_HEIGHT = 0x20;
 static constexpr size_t DOLLICON_COUNT = 0x200;
-static std::unique_ptr<uint32_t[]> g_dollicon_handle_buf = std::make_unique<uint32_t[]>(DOLLICON_COUNT + 1); // not sure if +1 necessary
-static std::unique_ptr<uint32_t[]> g_mark_handle_buf = std::make_unique<uint32_t[]>(6 + 1);
+static constexpr size_t HAZARD_ICON_WIDTH = 3;
+static constexpr size_t HAZARD_ICON_HEIGHT = 9;
+static constexpr size_t HAZARD_ICON_COUNT = HAZARD_ICON_WIDTH * HAZARD_ICON_HEIGHT;
+static std::unique_ptr<uint32_t[]> g_dollicon_handle_buf = std::make_unique<uint32_t[]>(DOLLICON_COUNT);
+static std::unique_ptr<uint32_t[]> g_mark_handle_buf = std::make_unique<uint32_t[]>(6);                     // puppet box mark icons
+static std::unique_ptr<uint32_t[]> g_number_handle_buf = std::make_unique<uint32_t[]>(11);                  // weather timer graphics
+static std::unique_ptr<uint32_t[]> g_small_number_handle_buf = std::make_unique<uint32_t[]>(10);
+static std::unique_ptr<uint32_t[]> g_hazard_handle_buf = std::make_unique<uint32_t[]>(HAZARD_ICON_COUNT);   // hazard overlay icons
+static std::unique_ptr<uint32_t[]> g_type_handle_buf = std::make_unique<uint32_t[]>(17);                    // type overlay icons
 
 std::once_flag g_music_init;
 
 std::string g_website_url = "";
+
+// overlay jank
+static uint32_t g_weather_counter = 0;
+static uint32_t g_terrain_counter = 0;
+static uint32_t g_last_weather_duration = 0;
+static uint32_t g_last_terrain_duration = 0;
+static uint32_t g_field_barrier_turns[] = { 0, 0 };
+static uint32_t g_field_protect_turns[] = { 0, 0 };
+static bool g_debug_overlay = false;
 
 // NOTE: we technically should be doing some XSAVE and FXSAVEs in here
 // but the game does not use SSE and our code does not use x87 (except floating point return values)
@@ -322,6 +338,14 @@ void do_battlestate_reset()
     for (auto& wish : g_wish_state)
         wish = {};
 
+    g_weather_counter = 0;
+    g_terrain_counter = 0;
+    g_last_weather_duration = 0;
+    g_last_terrain_duration = 0;
+    for(auto& i : g_field_barrier_turns)
+        i = 0;
+    for(auto& i : g_field_protect_turns)
+        i = 0;
     return;
 }
 
@@ -3144,10 +3168,7 @@ static void _draw_box_icons()
     {
         // replacement code for the hook site
         if(*RVA(0x9537e9).ptr<uint8_t*>() == 1)
-        {
-            auto func = RVA(0x1c5e80).ptr<int(__cdecl*)(int, int)>();
-            func(0x11, 0xff);
-        }
+            SetDrawBlendMode(0x11, 0xff);
 
         // called after puppet sprites are drawn
         draw_box_icons();
@@ -3169,8 +3190,23 @@ static void load_common_graphics()
     auto func = RVA(0x1afb00).ptr<VoidCall>();
     func();
 
-    if(g_mark_handle_buf[0] == (uint32_t)-1)
-        LoadDivGraph("dat\\gn_dat1\\common\\graphic\\mark.png", 6, 1, 6, 8, 8, (int*)g_mark_handle_buf.get());
+    if(IniFile::global.get_bool("general", "puppet_box_info_icons"))
+    {
+        if(g_mark_handle_buf[0] == (uint32_t)-1)
+            LoadDivGraph("dat\\gn_dat1\\common\\graphic\\mark.png", 6, 1, 6, 8, 8, (int*)g_mark_handle_buf.get());
+    }
+
+    if(IniFile::global.get_bool("general", "enable_battle_overlay"))
+    {
+        if(g_number_handle_buf[0] == (uint32_t)-1)
+            LoadDivGraph("dat\\gn_dat1\\common\\graphic\\numbers.png", 11, 11, 1, 16, 16, (int*)g_number_handle_buf.get());
+        if(g_small_number_handle_buf[0] == (uint32_t)-1)
+            LoadDivGraph("dat\\gn_dat1\\common\\graphic\\small_numbers.png", 10, 10, 1, 16, 16, (int*)g_small_number_handle_buf.get());
+        if(g_hazard_handle_buf[0] == (uint32_t)-1)
+            LoadDivGraph("dat\\gn_dat1\\common\\graphic\\hazards.png", HAZARD_ICON_COUNT, HAZARD_ICON_WIDTH, HAZARD_ICON_HEIGHT, 16, 16, (int*)g_hazard_handle_buf.get());
+        if(g_type_handle_buf[0] == (uint32_t)-1)
+            LoadDivGraph("dat\\gn_dat1\\common\\graphic\\type_tabs.png", 17, 17, 1, 9, 5, (int*)g_type_handle_buf.get());
+    }
 }
 
 static void patch_box_icons()
@@ -3179,13 +3215,328 @@ static void patch_box_icons()
         g_mark_handle_buf[i] = (uint32_t)-1;
     g_box_icon_return_addr = RVA(0x15504b);
 
-    // too early to load sprites directly, so we will hook
-    // the function that loads dat1 sprites
-    patch_call(RVA(0x1af872), load_common_graphics);
-
     // we hook this location because it's convenient to draw on top of
     // puppet sprites but under other UI elements
     patch_jump(RVA(0x155033), _draw_box_icons);
+}
+
+static void draw_weather_timer()
+{
+    // we don't want to reveal the actual turn limit so we'll count up
+    // by detecting the change in duration to advance the turn counter
+    auto tstate = get_terrain_state();
+    if(g_last_weather_duration != tstate->weather_duration)
+    {
+        if(g_last_weather_duration > tstate->weather_duration)
+            ++g_weather_counter;
+        else
+            g_weather_counter = 0;
+        g_last_weather_duration = tstate->weather_duration;
+    }
+    if(g_last_terrain_duration != tstate->terrain_duration)
+    {
+        if(g_last_terrain_duration > tstate->terrain_duration)
+            ++g_terrain_counter;
+        else
+            g_terrain_counter = 0;
+        g_last_terrain_duration = tstate->terrain_duration;
+    }
+
+    auto weather_alpha = *RVA(0x93c830).ptr<uint32_t*>();
+    auto terrain_alpha = *RVA(0x93c834).ptr<uint32_t*>();
+    if((tstate->weather_type == WEATHER_NONE) && (tstate->weather_icon == 0) && (weather_alpha == 0))
+        g_weather_counter = 0;
+    if((tstate->terrain_type == TERRAIN_NONE) && (tstate->terrain_icon == 0) && (terrain_alpha == 0))
+        g_terrain_counter = 0;
+
+    auto weather_turns = g_weather_counter;
+    auto terrain_turns = g_terrain_counter;
+    if((weather_turns > 9) || (tstate->weather_duration > 9))
+        weather_turns = 10;
+    if((terrain_turns > 9) || (tstate->terrain_duration > 9))
+        terrain_turns = 10;
+
+    constexpr auto weather_x = ((960 / 2) - 74) + 16;
+    constexpr auto terrain_x = ((960 / 2) + 74) - 16;
+    constexpr auto weather_y = 84 + 4;
+    constexpr auto terrain_y = 84 - 4;
+
+    // steady
+    if(tstate->weather_icon > 0)
+        DrawRotaGraph(weather_x, weather_y, 2.0, 0.0, g_number_handle_buf[weather_turns], 1);
+
+    // fade in/out
+    if(weather_alpha > 0)
+    {
+        SetDrawBlendMode(0x11, weather_alpha);
+        DrawRotaGraph(weather_x, weather_y, 2.0, 0.0, g_number_handle_buf[weather_turns], 1);
+        SetDrawBlendMode(0x11, 0xff);
+    }
+
+    // steady
+    if(tstate->terrain_icon > 0)
+        DrawRotaGraph(terrain_x, terrain_y, 2.0, 0.0, g_number_handle_buf[terrain_turns], 1);
+
+    // fade in/out
+    if(terrain_alpha > 0)
+    {
+        SetDrawBlendMode(0x11, terrain_alpha);
+        DrawRotaGraph(terrain_x, terrain_y, 2.0, 0.0, g_number_handle_buf[terrain_turns], 1);
+        SetDrawBlendMode(0x11, 0xff);
+    }
+}
+
+// find the puppet that hobgoblin would mimic
+static PartyPuppet *get_hobgoblin_puppet(int player)
+{
+    auto data = &get_battle_data()[player];
+
+    for(auto i = 0; i < 6; ++i)
+    {
+        auto ptr = &data->puppets[5 - i];
+        auto puppet = decrypt_puppet(ptr);
+        if((puppet.puppet_id != 0) && (puppet.hp > 0))
+            return ptr;
+    }
+
+    return &data->puppets[0];
+}
+
+static void draw_type_tabs()
+{
+    auto state = get_battle_state(0);
+    auto otherstate = get_battle_state(1);
+
+    constexpr auto width = 18;
+    constexpr auto height = 10;
+
+    // local player
+    if((state->field_0x9d != 0) && (state->field_0xb1 == 0) && (state->active_puppet != nullptr))
+    {
+        PartyPuppet puppet;
+        if(state->hobgoblin_is_active)
+            puppet = decrypt_puppet(get_hobgoblin_puppet(0));
+        else
+            puppet = decrypt_puppet(state->active_puppet);
+        const auto& data = get_puppet_data()[puppet.puppet_id].styles[puppet.style_index];
+        if((data.element1 > 0) && (data.element1 < ELEMENT_MAX))
+            DrawExtendGraph(192, 60 - height, 192 + width, 60, g_type_handle_buf[data.element1 - 1], 1);
+        if((data.element2 > 0) && (data.element2 < ELEMENT_MAX))
+            DrawExtendGraph(192 + width + 2, 60 - height, (192 + width + 2) + width, 60, g_type_handle_buf[data.element2 - 1], 1);
+    }
+
+    // opponent
+    if((otherstate->field_0x9d != 0) && (otherstate->field_0xb1 == 0) && (otherstate->active_puppet != nullptr))
+    {
+        PartyPuppet puppet;
+        if(otherstate->hobgoblin_is_active)
+            puppet = decrypt_puppet(get_hobgoblin_puppet(1));
+        else
+            puppet = decrypt_puppet(otherstate->active_puppet);
+        const auto& data = get_puppet_data()[puppet.puppet_id].styles[puppet.style_index];
+        if((data.element1 > 0) && (data.element1 < ELEMENT_MAX))
+            DrawExtendGraph(746, 60 - height, 746 + width, 60, g_type_handle_buf[data.element1 - 1], 1);
+        if((data.element2 > 0) && (data.element2 < ELEMENT_MAX))
+            DrawExtendGraph(746 + width + 2, 60 - height, (746 + width + 2) + width, 60, g_type_handle_buf[data.element2 - 1], 1);
+    }
+}
+
+static void draw_hazard_icons()
+{
+    constexpr auto width = 32;
+    constexpr auto height = 32;
+
+    constexpr auto base_y = (720 / 2) - (4 * height);
+
+    auto state = get_battle_state(0);
+    auto mines = std::clamp(state->num_mine_trap, 0, 3);
+    auto pois = std::clamp(state->num_poison_trap, 0, 2);
+    auto fb_turns = (g_field_barrier_turns[0] > 5u && state->field_barrier_turns > 3) ? state->field_barrier_turns - 3u : state->field_barrier_turns;
+    auto fp_turns = (g_field_protect_turns[0] > 5u && state->field_protect_turns > 3) ? state->field_protect_turns - 3u : state->field_protect_turns;
+
+    // local player
+    if(mines > 0)
+        DrawExtendGraph(0, base_y + (height * 0), 0 + width, base_y + (height * 0) + height, g_hazard_handle_buf[mines - 1], 1);
+    if(state->stealth_trap)
+        DrawExtendGraph(0, base_y + (height * 1), 0 + width, base_y + (height * 1) + height, g_hazard_handle_buf[3], 1);
+    if(pois > 0)
+        DrawExtendGraph(0, base_y + (height * 2), 0 + width, base_y + (height * 2) + height, g_hazard_handle_buf[6 + (pois - 1)], 1);
+    if(state->bind_trap)
+        DrawExtendGraph(0, base_y + (height * 3), 0 + width, base_y + (height * 3) + height, g_hazard_handle_buf[9], 1);
+    if(state->field_barrier_turns > 0)
+    {
+        DrawExtendGraph(0, base_y + (height * 4), 0 + width, base_y + (height * 4) + height, g_hazard_handle_buf[12], 1);
+        DrawExtendGraph(0, base_y + (height * 4), 0 + width, base_y + (height * 4) + height, g_small_number_handle_buf[std::clamp(fb_turns, 0u, 9u)], 1);
+    }
+    if(state->field_protect_turns > 0)
+    {
+        DrawExtendGraph(0, base_y + (height * 5), 0 + width, base_y + (height * 5) + height, g_hazard_handle_buf[15], 1);
+        DrawExtendGraph(0, base_y + (height * 5), 0 + width, base_y + (height * 5) + height, g_small_number_handle_buf[std::clamp(fp_turns, 0u, 9u)], 1);
+    }
+    if(state->wind_gods_grace_turns > 0)
+    {
+        DrawExtendGraph(0, base_y + (height * 6), 0 + width, base_y + (height * 6) + height, g_hazard_handle_buf[18], 1);
+        DrawExtendGraph(0, base_y + (height * 6), 0 + width, base_y + (height * 6) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->wind_gods_grace_turns, 0u, 9u)], 1);
+    }
+    if(state->lucky_rainbow_turns > 0)
+    {
+        DrawExtendGraph(0, base_y + (height * 7), 0 + width, base_y + (height * 7) + height, g_hazard_handle_buf[21], 1);
+        DrawExtendGraph(0, base_y + (height * 7), 0 + width, base_y + (height * 7) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->lucky_rainbow_turns, 0u, 9u)], 1);
+    }
+    if(state->veil_of_water_turns > 0)
+    {
+        DrawExtendGraph(0, base_y + (height * 8), 0 + width, base_y + (height * 8) + height, g_hazard_handle_buf[24], 1);
+        DrawExtendGraph(0, base_y + (height * 8), 0 + width, base_y + (height * 8) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->veil_of_water_turns, 0u, 9u)], 1);
+    }
+
+    state = get_battle_state(1);
+    mines = std::clamp(state->num_mine_trap, 0, 3);
+    pois = std::clamp(state->num_poison_trap, 0, 2);
+    fb_turns = (g_field_barrier_turns[1] > 5u && state->field_barrier_turns > 3) ? state->field_barrier_turns - 3u : state->field_barrier_turns;
+    fp_turns = (g_field_protect_turns[1] > 5u && state->field_protect_turns > 3) ? state->field_protect_turns - 3u : state->field_protect_turns;
+
+    // opponent
+    constexpr auto base_x = 960 - width;
+    if(mines > 0)
+        DrawExtendGraph(base_x, base_y + (height * 0), base_x + width, base_y + (height * 0) + height, g_hazard_handle_buf[mines - 1], 1);
+    if(state->stealth_trap)
+        DrawExtendGraph(base_x, base_y + (height * 1), base_x + width, base_y + (height * 1) + height, g_hazard_handle_buf[3], 1);
+    if(pois > 0)
+        DrawExtendGraph(base_x, base_y + (height * 2), base_x + width, base_y + (height * 2) + height, g_hazard_handle_buf[6 + (pois - 1)], 1);
+    if(state->bind_trap)
+        DrawExtendGraph(base_x, base_y + (height * 3), base_x + width, base_y + (height * 3) + height, g_hazard_handle_buf[9], 1);
+    if(state->field_barrier_turns > 0)
+    {
+        DrawExtendGraph(0, base_y + (height * 4), 0 + width, base_y + (height * 4) + height, g_hazard_handle_buf[12], 1);
+        DrawExtendGraph(0, base_y + (height * 4), 0 + width, base_y + (height * 4) + height, g_small_number_handle_buf[std::clamp(fb_turns, 0u, 9u)], 1);
+    }
+    if(state->field_protect_turns > 0)
+    {
+        DrawExtendGraph(0, base_y + (height * 5), 0 + width, base_y + (height * 5) + height, g_hazard_handle_buf[15], 1);
+        DrawExtendGraph(0, base_y + (height * 5), 0 + width, base_y + (height * 5) + height, g_small_number_handle_buf[std::clamp(fp_turns, 0u, 9u)], 1);
+    }
+    if(state->wind_gods_grace_turns > 0)
+    {
+        DrawExtendGraph(0, base_y + (height * 6), 0 + width, base_y + (height * 6) + height, g_hazard_handle_buf[18], 1);
+        DrawExtendGraph(0, base_y + (height * 6), 0 + width, base_y + (height * 6) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->wind_gods_grace_turns, 0u, 9u)], 1);
+    }
+    if(state->lucky_rainbow_turns > 0)
+    {
+        DrawExtendGraph(0, base_y + (height * 7), 0 + width, base_y + (height * 7) + height, g_hazard_handle_buf[21], 1);
+        DrawExtendGraph(0, base_y + (height * 7), 0 + width, base_y + (height * 7) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->lucky_rainbow_turns, 0u, 9u)], 1);
+    }
+    if(state->veil_of_water_turns > 0)
+    {
+        DrawExtendGraph(0, base_y + (height * 8), 0 + width, base_y + (height * 8) + height, g_hazard_handle_buf[24], 1);
+        DrawExtendGraph(0, base_y + (height * 8), 0 + width, base_y + (height * 8) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->veil_of_water_turns, 0u, 9u)], 1);
+    }
+}
+
+// the most fucked up printf you'll ever see
+static int draw_uint(unsigned int val, int x, int y, int width, int height)
+{
+    static_assert(sizeof(val) == 4);
+    uint8_t digits[10]; // 32-bit int cannot exceed 10 decimal digits
+    int count = 0;
+    do
+    {
+        auto rem = val % 10u;
+        val /= 10u;
+        digits[count] = (uint8_t)rem;
+        ++count;
+    } while(val > 0);
+
+    for(auto i = count; i > 0; --i)
+    {
+        DrawExtendGraph(x, y, x + width, y + height, g_number_handle_buf[digits[i - 1]], 1);
+        x += width;
+    }
+
+    return count;
+}
+
+static void draw_debug_overlay()
+{
+    constexpr auto width = 12;
+    constexpr auto height = 12;
+
+    auto state = get_battle_state(0);
+    if(state->active_puppet != nullptr)
+    {
+        auto puppet = decrypt_puppet(state->active_puppet);
+        auto data = get_puppet_data()[puppet.puppet_id].styles[puppet.style_index];
+        auto x = 4;
+        for(auto i = 0; i < 6; ++i)
+        {
+            auto num_digits = draw_uint(data.base_stats[i], x, 86, width, height);
+            x += (num_digits * width) + 4;
+        }
+    }
+
+    state = get_battle_state(1);
+    if(state->active_puppet != nullptr)
+    {
+        auto puppet = decrypt_puppet(state->active_puppet);
+        auto data = get_puppet_data()[puppet.puppet_id].styles[puppet.style_index];
+        auto x = 570;
+        for(auto i = 0; i < 6; ++i)
+        {
+            auto num_digits = draw_uint(data.base_stats[i], x, 86, width, height);
+            x += (num_digits * width) + 4;
+        }
+    }
+}
+
+static void draw_battle_overlay()
+{
+    // call original first
+    auto func = RVA(0x20720).ptr<VoidCall>();
+    func();
+
+    draw_type_tabs();
+    draw_hazard_icons();
+    draw_weather_timer();
+    if(g_debug_overlay)
+        draw_debug_overlay();
+}
+
+int __cdecl field_barrier_hook(int player, int effect_chance)
+{
+    auto func = RVA(0x1a8b60).ptr<SkillCall>();
+    auto retval = func(player, effect_chance);
+
+    g_field_barrier_turns[player] = get_battle_state(player)->field_barrier_turns;
+
+    return retval;
+}
+
+int __cdecl field_protect_hook(int player, int effect_chance)
+{
+    auto func = RVA(0x1a8910).ptr<SkillCall>();
+    auto retval = func(player, effect_chance);
+
+    g_field_protect_turns[player] = get_battle_state(player)->field_protect_turns;
+
+    return retval;
+}
+
+static void patch_battle_overlay()
+{
+    for(auto i = 0; i < 11; ++i)
+        g_number_handle_buf[i] = (uint32_t)-1;
+    for(auto i = 0; i < 10; ++i)
+        g_small_number_handle_buf[i] = (uint32_t)-1;
+    for(auto i = 0; i < HAZARD_ICON_COUNT; ++i)
+        g_hazard_handle_buf[i] = (uint32_t)-1;
+    for(auto i = 0; i < 17; ++i)
+        g_type_handle_buf[i] = (uint32_t)-1;
+
+    // patch in hooks for field protect/barrier so we know
+    // how many turns were originally set
+    register_custom_skill(90, field_protect_hook);
+    register_custom_skill(91, field_barrier_hook);
+
+    patch_call(RVA(0x255d5), draw_battle_overlay);
 }
 
 // initialization
@@ -3213,6 +3564,10 @@ void init_misc_hacks()
     // hook background rendering
     patch_backgrounds();
 
+    // too early to load sprites directly, so we will hook
+    // the function that loads dat1 sprites
+    patch_call(RVA(0x1af872), load_common_graphics);
+
     // bgm limit
     if(IniFile::global.get_bool("general", "extra_music_hack"))
         patch_bgm_limit();
@@ -3231,6 +3586,11 @@ void init_misc_hacks()
 
     if(IniFile::global.get_bool("general", "puppet_box_info_icons"))
         patch_box_icons();
+
+    if(IniFile::global.get_bool("general", "enable_battle_overlay"))
+        patch_battle_overlay();
+
+    g_debug_overlay = IniFile::global.get_bool("general", "enable_debug_overlay");
 
     // change alt-color text in the costume shop
     if(tpdp_eng_translation())

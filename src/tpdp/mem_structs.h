@@ -207,7 +207,7 @@ struct BattleState {
     undefined field_0x159;
     undefined field_0x15a;
     undefined field_0x15b;
-    undefined field_0x15c;
+    bool hobgoblin_is_active;
     undefined field_0x15d;
     undefined field_0x15e;
     byte field_0x15f;
@@ -241,9 +241,9 @@ struct BattleState {
     int turn_order;
     undefined field_barrier_turns;
     undefined field_protect_turns;
-    undefined field_0x18a;
-    undefined field_0x18b;
-    undefined field_0x18c;
+    undefined lucky_rainbow_turns;
+    undefined veil_of_water_turns;
+    undefined wind_gods_grace_turns;
     undefined field_0x18d;
     undefined field_0x18e;
     undefined field_0x18f;
@@ -589,8 +589,8 @@ typedef struct TerrainState TerrainState, *PTerrainState;
 struct TerrainState {
     byte weather_type;
     byte terrain_type;
-    undefined field_0x2;
-    undefined field_0x3;
+    byte weather_icon;
+    byte terrain_icon;
     uint weather_duration;
     uint terrain_duration;
 };

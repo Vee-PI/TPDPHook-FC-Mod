@@ -1,6 +1,9 @@
 #pragma once
 #include "../typedefs.h"
 
+// these facilitate calls to the dxlib graphics API functions static linked into the game exe
+// see dxlib source code for more information https://dxlib.xsrv.jp/
+
 // creation/deletion functions
 HOOKAPI int MakeGraph(int SizeX, int SizeY, int NotUse3DFlag = 0); // create blank texture
 HOOKAPI int DeleteSharingGraph(int GrHandle); // free texture handle along with all of its derivatives
@@ -18,3 +21,7 @@ HOOKAPI int DrawRotaGraph(int x, int y, double ExRate, double Angle, int GrHandl
 HOOKAPI int DrawGraphF(float xf, float yf, int GrHandle, int TransFlag);
 HOOKAPI int DrawExtendGraphF(float x1f, float y1f, float x2f, float y2, int GrHandle, int TransFlag);
 HOOKAPI int DrawRotaGraphF(float xf, float yf, double ExRate, double Angle, int GrHandle, int TransFlag, int TurnFlag = 0);
+
+// blend mode
+// see DX_BLENDMODE_XXX in DxLib.h
+HOOKAPI int SetDrawBlendMode(int BlendMode, int BlendParam);
