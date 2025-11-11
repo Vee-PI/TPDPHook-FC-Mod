@@ -12,6 +12,8 @@ int do_form_change(int player, int pid, int style, bool switchin, bool possess =
 extern unsigned int g_id_possess;
 extern unsigned int g_id_possess_target;
 extern unsigned int g_id_possess_target_style;
+extern unsigned int g_field_barrier_turns[2];
+extern unsigned int g_field_protect_turns[2];
 
 struct WishState
 {

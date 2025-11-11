@@ -927,6 +927,26 @@ static void test_skill_anim([[maybe_unused]] int player)
         play_sfx(4);
 }
 
+int __cdecl field_barrier_hook(int player, int effect_chance)
+{
+    auto func = RVA(0x1a8b60).ptr<SkillCall>();
+    auto retval = func(player, effect_chance);
+
+    g_field_barrier_turns[player] = get_battle_state(player)->field_barrier_turns;
+
+    return retval;
+}
+
+int __cdecl field_protect_hook(int player, int effect_chance)
+{
+    auto func = RVA(0x1a8910).ptr<SkillCall>();
+    auto retval = func(player, effect_chance);
+
+    g_field_protect_turns[player] = get_battle_state(player)->field_protect_turns;
+
+    return retval;
+}
+
 // Bind skill functions to effect ids.
 void init_custom_skills()
 {
@@ -1127,6 +1147,14 @@ void init_custom_skills()
     {
         register_custom_skill_anim(56, test_skill_loader, test_skill_deleter, test_skill_anim, nullptr, test_skill_tick); // yin energy
         register_custom_skill_anim(58, test_skill_loader, test_skill_deleter, test_skill_anim, nullptr, test_skill_tick); // yang energy
+    }
+
+    if(IniFile::global.get_bool("general", "enable_battle_overlay"))
+    {
+        // patch in hooks for field protect/barrier so we know
+        // how many turns were originally set
+        register_custom_skill(90, field_protect_hook);
+        register_custom_skill(91, field_barrier_hook);
     }
 }
 
