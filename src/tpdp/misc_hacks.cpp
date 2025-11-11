@@ -206,8 +206,8 @@ static uint32_t g_weather_counter = 0;
 static uint32_t g_terrain_counter = 0;
 static uint32_t g_last_weather_duration = 0;
 static uint32_t g_last_terrain_duration = 0;
-static uint32_t g_field_barrier_turns[] = { 0, 0 };
-static uint32_t g_field_protect_turns[] = { 0, 0 };
+unsigned int g_field_barrier_turns[2] = { 0, 0 };
+unsigned int g_field_protect_turns[2] = { 0, 0 };
 static bool g_debug_overlay = false;
 
 // NOTE: we technically should be doing some XSAVE and FXSAVEs in here
@@ -3227,7 +3227,7 @@ static void draw_weather_timer()
     auto tstate = get_terrain_state();
     if(g_last_weather_duration != tstate->weather_duration)
     {
-        if(g_last_weather_duration > tstate->weather_duration)
+        if((g_last_weather_duration - tstate->weather_duration) == 1)
             ++g_weather_counter;
         else
             g_weather_counter = 0;
@@ -3235,7 +3235,7 @@ static void draw_weather_timer()
     }
     if(g_last_terrain_duration != tstate->terrain_duration)
     {
-        if(g_last_terrain_duration > tstate->terrain_duration)
+        if((g_last_terrain_duration - tstate->terrain_duration) == 1)
             ++g_terrain_counter;
         else
             g_terrain_counter = 0;
@@ -3313,12 +3313,13 @@ static void draw_type_tabs()
     // local player
     if((state->field_0x9d != 0) && (state->field_0xb1 == 0) && (state->active_puppet != nullptr))
     {
-        PartyPuppet puppet;
+        /*PartyPuppet puppet;
         if(state->hobgoblin_is_active)
             puppet = decrypt_puppet(get_hobgoblin_puppet(0));
         else
             puppet = decrypt_puppet(state->active_puppet);
-        const auto& data = get_puppet_data()[puppet.puppet_id].styles[puppet.style_index];
+        const auto& data = get_puppet_data()[puppet.puppet_id].styles[puppet.style_index];*/
+        const auto& data = get_puppet_data()[state->active_puppet_id].styles[state->active_style_index];
         if((data.element1 > 0) && (data.element1 < ELEMENT_MAX))
             DrawExtendGraph(192, 60 - height, 192 + width, 60, g_type_handle_buf[data.element1 - 1], 1);
         if((data.element2 > 0) && (data.element2 < ELEMENT_MAX))
@@ -3328,12 +3329,13 @@ static void draw_type_tabs()
     // opponent
     if((otherstate->field_0x9d != 0) && (otherstate->field_0xb1 == 0) && (otherstate->active_puppet != nullptr))
     {
-        PartyPuppet puppet;
+        /*PartyPuppet puppet;
         if(otherstate->hobgoblin_is_active)
             puppet = decrypt_puppet(get_hobgoblin_puppet(1));
         else
             puppet = decrypt_puppet(otherstate->active_puppet);
-        const auto& data = get_puppet_data()[puppet.puppet_id].styles[puppet.style_index];
+        const auto& data = get_puppet_data()[puppet.puppet_id].styles[puppet.style_index];*/
+        const auto& data = get_puppet_data()[otherstate->active_puppet_id].styles[otherstate->active_style_index];
         if((data.element1 > 0) && (data.element1 < ELEMENT_MAX))
             DrawExtendGraph(746, 60 - height, 746 + width, 60, g_type_handle_buf[data.element1 - 1], 1);
         if((data.element2 > 0) && (data.element2 < ELEMENT_MAX))
@@ -3500,26 +3502,6 @@ static void draw_battle_overlay()
         draw_debug_overlay();
 }
 
-int __cdecl field_barrier_hook(int player, int effect_chance)
-{
-    auto func = RVA(0x1a8b60).ptr<SkillCall>();
-    auto retval = func(player, effect_chance);
-
-    g_field_barrier_turns[player] = get_battle_state(player)->field_barrier_turns;
-
-    return retval;
-}
-
-int __cdecl field_protect_hook(int player, int effect_chance)
-{
-    auto func = RVA(0x1a8910).ptr<SkillCall>();
-    auto retval = func(player, effect_chance);
-
-    g_field_protect_turns[player] = get_battle_state(player)->field_protect_turns;
-
-    return retval;
-}
-
 static void patch_battle_overlay()
 {
     for(auto i = 0; i < 11; ++i)
@@ -3530,11 +3512,6 @@ static void patch_battle_overlay()
         g_hazard_handle_buf[i] = (uint32_t)-1;
     for(auto i = 0; i < 17; ++i)
         g_type_handle_buf[i] = (uint32_t)-1;
-
-    // patch in hooks for field protect/barrier so we know
-    // how many turns were originally set
-    register_custom_skill(90, field_protect_hook);
-    register_custom_skill(91, field_barrier_hook);
 
     patch_call(RVA(0x255d5), draw_battle_overlay);
 }
