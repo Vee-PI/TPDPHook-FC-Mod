@@ -3006,14 +3006,10 @@ void do_backgrounds()
     }
 }
 
-static void do_background_bgm()
+static uint8_t get_default_background_bgm(unsigned int background_id)
 {
-    auto background_id = *RVA(0xc5996a).ptr<uint8_t*>();
-    auto bgm_id_ptr = RVA(0xc57871).ptr<uint8_t*>();
-
     switch(background_id)
     {
-        // vanilla backgrounds
     case 3:
     case 0xf:
     case 0x19:
@@ -3021,8 +3017,7 @@ static void do_background_bgm()
     case 0x33:
     case 0x34:
     case 0x35:
-        *bgm_id_ptr = 0x5c;
-        break;
+        return 0x5c;
     case 4:
     case 9:
     case 0xd:
@@ -3031,8 +3026,7 @@ static void do_background_bgm()
     case 0x1b:
     case 0x1c:
     case 0x1d:
-        *bgm_id_ptr = 0x5d;
-        break;
+        return 0x5d;
     case 5:
     case 0x14:
     case 0x15:
@@ -3040,29 +3034,33 @@ static void do_background_bgm()
     case 0x17:
     case 0x18:
     case 0x24:
-        *bgm_id_ptr = 0x5e;
-        break;
-    default:
-        *bgm_id_ptr = 0x50;
-        break;
+        return 0x5e;
     case 0x11:
     case 0x2e:
     case 0x3a:
-        *bgm_id_ptr = 0x62;
-        break;
+        return 0x62;
     case 0x2c:
     case 0x2d:
     case 0x39:
     case 0x3b:
     case 0x3c:
-        *bgm_id_ptr = 0x47;
-        break;
+        return 0x47;
 
-        // custom entries begin here
-    case 0x3d:
-        *bgm_id_ptr = 0x40;
-        break;
+    default:
+        return 0x50;
     }
+}
+
+static void do_background_bgm()
+{
+    auto background_id = *RVA(0xc5996a).ptr<uint8_t*>();
+    auto bgm_id_ptr = RVA(0xc57871).ptr<uint8_t*>();
+
+    auto bgm_id = IniFile::global.get_uint("background_bgm", std::to_string((unsigned int)background_id));
+    if(bgm_id != ID_NONE)
+        *bgm_id_ptr = (uint8_t)bgm_id;
+    else
+        *bgm_id_ptr = get_default_background_bgm(background_id);
 }
 
 __declspec(naked)
