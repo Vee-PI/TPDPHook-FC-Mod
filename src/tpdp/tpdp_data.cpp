@@ -175,7 +175,7 @@ int do_weather_msg()
     }
 
     case 1:
-        do_terrain_hook();
+        do_weather_hook();
         _state = 2;
         return 1;
 
