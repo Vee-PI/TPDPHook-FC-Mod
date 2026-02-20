@@ -2,6 +2,7 @@
 
 void init_misc_hacks();
 void do_terrain_hook();
+void do_weather_hook();
 int do_possess();
 
 extern bool g_form_changes[2][6];

@@ -202,10 +202,8 @@ std::once_flag g_music_init;
 std::string g_website_url = "";
 
 // overlay jank
-static uint32_t g_weather_counter = 0;
-static uint32_t g_terrain_counter = 0;
-static uint32_t g_last_weather_duration = 0;
-static uint32_t g_last_terrain_duration = 0;
+static uint32_t g_weather_duration = 0;
+static uint32_t g_terrain_duration = 0;
 unsigned int g_field_barrier_turns[2] = { 0, 0 };
 unsigned int g_field_protect_turns[2] = { 0, 0 };
 static bool g_debug_overlay = false;
@@ -242,7 +240,7 @@ uint32_t ip_str_to_be32(const std::string& str)
 
 // Secret Ceremony
 // called whenever weather/terrain is changed
-void do_terrain_hook()
+static void do_secret_ceremony()
 {
     static const ElementType weathertypes[] = { ELEMENT_VOID, ELEMENT_WIND, ELEMENT_LIGHT, ELEMENT_DARK, ELEMENT_EARTH, ELEMENT_WARPED };
     static const ElementType terraintypes[] = { ELEMENT_VOID, ELEMENT_NATURE, ELEMENT_FIRE, ELEMENT_STEEL, ELEMENT_WATER, ELEMENT_EARTH };
@@ -275,6 +273,20 @@ void do_terrain_hook()
             state->active_type2 = (byte)newtypes[1];
         }
     }
+}
+
+void do_terrain_hook()
+{
+    do_secret_ceremony();
+
+    g_terrain_duration = get_terrain_state()->terrain_duration;
+}
+
+void do_weather_hook()
+{
+    do_secret_ceremony();
+
+    g_weather_duration = get_terrain_state()->weather_duration;
 }
 
 int do_possess()
@@ -338,10 +350,8 @@ void do_battlestate_reset()
     for (auto& wish : g_wish_state)
         wish = {};
 
-    g_weather_counter = 0;
-    g_terrain_counter = 0;
-    g_last_weather_duration = 0;
-    g_last_terrain_duration = 0;
+    g_weather_duration = 0;
+    g_terrain_duration = 0;
     for(auto& i : g_field_barrier_turns)
         i = 0;
     for(auto& i : g_field_protect_turns)
@@ -3220,39 +3230,15 @@ static void patch_box_icons()
 
 static void draw_weather_timer()
 {
-    // we don't want to reveal the actual turn limit so we'll count up
-    // by detecting the change in duration to advance the turn counter
     auto tstate = get_terrain_state();
-    if(g_last_weather_duration != tstate->weather_duration)
-    {
-        if((g_last_weather_duration - tstate->weather_duration) == 1)
-            ++g_weather_counter;
-        else
-            g_weather_counter = 0;
-        g_last_weather_duration = tstate->weather_duration;
-    }
-    if(g_last_terrain_duration != tstate->terrain_duration)
-    {
-        if((g_last_terrain_duration - tstate->terrain_duration) == 1)
-            ++g_terrain_counter;
-        else
-            g_terrain_counter = 0;
-        g_last_terrain_duration = tstate->terrain_duration;
-    }
 
     auto weather_alpha = *RVA(0x93c830).ptr<uint32_t*>();
     auto terrain_alpha = *RVA(0x93c834).ptr<uint32_t*>();
-    if((tstate->weather_type == WEATHER_NONE) && (tstate->weather_icon == 0) && (weather_alpha == 0))
-        g_weather_counter = 0;
-    if((tstate->terrain_type == TERRAIN_NONE) && (tstate->terrain_icon == 0) && (terrain_alpha == 0))
-        g_terrain_counter = 0;
 
-    auto weather_turns = g_weather_counter;
-    auto terrain_turns = g_terrain_counter;
-    if((weather_turns > 9) || (tstate->weather_duration > 9))
-        weather_turns = 10;
-    if((terrain_turns > 9) || (tstate->terrain_duration > 9))
-        terrain_turns = 10;
+    auto weather_turns = std::min(tstate->weather_duration, 10u);
+    auto terrain_turns = std::min(tstate->terrain_duration, 10u);
+    if((weather_turns == 8) || ((g_weather_duration == 8) && (weather_turns > 3) && (weather_turns <= 8)))
+        weather_turns -= 3;
 
     constexpr auto weather_x = ((960 / 2) - 74) + 16;
     constexpr auto terrain_x = ((960 / 2) + 74) - 16;
