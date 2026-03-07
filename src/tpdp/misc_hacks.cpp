@@ -18,6 +18,7 @@
 #include <mutex>
 #include <regex>
 #include <fstream>
+#include <numbers>
 
 static const char* g_element_names_en[] = {
     "None",
@@ -196,6 +197,7 @@ static std::unique_ptr<uint32_t[]> g_number_handle_buf = std::make_unique<uint32
 static std::unique_ptr<uint32_t[]> g_small_number_handle_buf = std::make_unique<uint32_t[]>(10);
 static std::unique_ptr<uint32_t[]> g_hazard_handle_buf = std::make_unique<uint32_t[]>(HAZARD_ICON_COUNT);   // hazard overlay icons
 static std::unique_ptr<uint32_t[]> g_type_handle_buf = std::make_unique<uint32_t[]>(17);                    // type overlay icons
+static std::unique_ptr<uint32_t[]> g_boost_handle_buf = std::make_unique<uint32_t[]>(6 * 5);                // stat boost overlay icons
 
 std::once_flag g_music_init;
 
@@ -3214,6 +3216,8 @@ static void load_common_graphics()
             LoadDivGraph("dat\\gn_dat1\\common\\graphic\\hazards.png", HAZARD_ICON_COUNT, HAZARD_ICON_WIDTH, HAZARD_ICON_HEIGHT, 16, 16, (int*)g_hazard_handle_buf.get());
         if(g_type_handle_buf[0] == (uint32_t)-1)
             LoadDivGraph("dat\\gn_dat1\\common\\graphic\\type_tabs.png", 17, 17, 1, 9, 5, (int*)g_type_handle_buf.get());
+        if(g_boost_handle_buf[0] == (uint32_t)-1)
+            LoadDivGraph("dat\\gn_dat1\\common\\graphic\\boosts.png", 6 * 5, 6, 5, 20, 20, (int*)g_boost_handle_buf.get());
     }
 }
 
@@ -3473,6 +3477,44 @@ static void draw_debug_overlay()
     }
 }
 
+static void draw_boost_icons()
+{
+    constexpr auto width = (120 / 6) * 2;
+    constexpr auto height = (100 / 5) * 2;
+    constexpr auto cx = width / 2;
+    constexpr auto cy = height / 2;
+
+    auto pos = 0;
+    auto state = get_battle_state(0);
+    for(auto i = 0; i < 5; ++i)
+    {
+        auto boost = (int)state->stat_modifiers[i + 1];
+        if(boost == 0)
+            continue;
+        auto angle = (boost < 0) ? std::numbers::pi_v<double> : 0.0;
+        auto index = (i * 6) + std::min(std::abs(boost) - 1, 5);
+        auto x = 230 + cx + (pos * width);
+        auto y = 125 + cy;
+        DrawRotaGraph(x, y, 2.0, angle, g_boost_handle_buf[index], 1);
+        ++pos;
+    }
+
+    pos = 0;
+    state = get_battle_state(1);
+    for(auto i = 0; i < 5; ++i)
+    {
+        auto boost = (int)state->stat_modifiers[i + 1];
+        if(boost == 0)
+            continue;
+        auto angle = (boost < 0) ? std::numbers::pi_v<double> : 0.0;
+        auto index = (i * 6) + std::min(std::abs(boost) - 1, 5);
+        auto x = 556 + cx + (pos * width);
+        auto y = 125 + cy;
+        DrawRotaGraph(x, y, 2.0, angle, g_boost_handle_buf[index], 1);
+        ++pos;
+    }
+}
+
 static void draw_battle_overlay()
 {
     // call original first
@@ -3482,6 +3524,7 @@ static void draw_battle_overlay()
     draw_type_tabs();
     draw_hazard_icons();
     draw_weather_timer();
+    draw_boost_icons();
     if(g_debug_overlay)
         draw_debug_overlay();
 }
@@ -3496,6 +3539,8 @@ static void patch_battle_overlay()
         g_hazard_handle_buf[i] = (uint32_t)-1;
     for(auto i = 0; i < 17; ++i)
         g_type_handle_buf[i] = (uint32_t)-1;
+    for(auto i = 0; i < (6 * 5); ++i)
+        g_boost_handle_buf[i] = (uint32_t)-1;
 
     patch_call(RVA(0x255d5), draw_battle_overlay);
 }
