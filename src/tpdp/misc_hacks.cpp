@@ -3006,14 +3006,24 @@ void patch_main_loop()
 void do_backgrounds()
 {
     auto func = RVA(0x24aa0).ptr<VoidCall>();
-    auto id = *RVA(0x93bcd7).ptr<uint8_t*>();
+    auto bg_id_ptr = RVA(0x93bcd7).ptr<uint8_t*>();
+    auto id = *bg_id_ptr;
     auto draw_handles = RVA(0x93c0e0).ptr<uint32_t*>(); // uint32_t[16] (?) handles to be drawn this frame
     auto sprite_handles = RVA(0x93c188).ptr<uint32_t*>(); // uint32_t[16] handles for all sprites allocated for this background
 
+    // swap animations
+    auto new_id = IniFile::global.get_uint("background_anims", std::to_string((unsigned int)id));
+    if(new_id != ID_NONE)
+    {
+        *bg_id_ptr = (uint8_t)new_id;
+        id = (uint8_t)new_id;
+    }
+
+    // implementation
     switch(id)
     {
     default:
-        func();
+        func(); // vanilla animations
         break;
     }
 }
