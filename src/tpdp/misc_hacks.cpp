@@ -19,6 +19,7 @@
 #include <regex>
 #include <fstream>
 #include <numbers>
+#include <unordered_map>
 
 static const char* g_element_names_en[] = {
     "None",
@@ -74,7 +75,6 @@ static void *g_stealth_return_addr = nullptr;
 static void *g_bind_return_addr = nullptr;
 static void *g_pois_return_addr = nullptr;
 static void *g_sprintf_addr = nullptr;
-static void *g_background_return_addr = nullptr;
 static void *g_background_bgm_return_addr = nullptr;
 static void *g_box_icon_return_addr = nullptr;
 //static void *g_music_return_addr = nullptr;
@@ -198,6 +198,9 @@ static std::unique_ptr<uint32_t[]> g_small_number_handle_buf = std::make_unique<
 static std::unique_ptr<uint32_t[]> g_hazard_handle_buf = std::make_unique<uint32_t[]>(HAZARD_ICON_COUNT);   // hazard overlay icons
 static std::unique_ptr<uint32_t[]> g_type_handle_buf = std::make_unique<uint32_t[]>(17);                    // type overlay icons
 static std::unique_ptr<uint32_t[]> g_boost_handle_buf = std::make_unique<uint32_t[]>(6 * 5);                // stat boost overlay icons
+
+static std::unordered_map<int, std::string> g_locationbg;
+static std::unique_ptr<uint8_t[]> g_locationbg_buf;
 
 std::once_flag g_music_init;
 
@@ -467,17 +470,6 @@ uint do_dmg_calc(BattleState *state, BattleState *otherstate, int player, [[mayb
             dmg *= g_mod_magic; //magic boost
     }
 
-   /* auto data = get_skill_data();
-    if (g_patch_miracle && (data->effect_id == 120))
-    {
-        auto otherstate.
-        auto boost = 0;
-        for (auto stat : otherstate->stat_modifiers)
-            if (stat > 0)
-        damage *= num_stat_boosts + 1;
-    } 
-    miracle reprisal, come back when you're stronger */
-
     if((int)dmg < 0)
     {
         dmg = 1;
@@ -566,21 +558,6 @@ int __stdcall do_battle_stats(BattleState *state, byte stat_index, bool crit, bo
         return 1;
     return (int)result;
 }
-    /*else if (((uint)state->active_ability == g_id_astronomy) && (otherstate->active_ability != 335) && (terrain_state->terrain_type != TERRAIN_KOHRYU) && (data->classification == SKILL_CLASS_BU))
-    {
-        auto power = (double)data->power;
-        data->power = (byte)std::clamp(power + (power * g_mod_class_abl), 0.0, 255.0); // Astronomy
-    }
-    else if(((uint)state->active_ability == g_id_empowered) && (otherstate->active_ability != 335) && (terrain_state->terrain_type != TERRAIN_KOHRYU) && (data->classification == SKILL_CLASS_EN))
-    {
-        auto power = (double)data->power;
-        data->power = (byte)std::clamp(power + (power * g_mod_class_abl), 0.0, 255.0); // Empowered
-    }
-    else if (((uint)state->active_ability == g_id_magic) && (otherstate->active_ability != 335) && (terrain_state->terrain_type != TERRAIN_KOHRYU) && (data->power >= 120))
-    {
-        auto power = (double)data->power;
-        data->power = (byte)std::clamp(power + (power * g_mod_magic), 0.0, 255.0);
-    }*/
 
 // override type/power/prio/etc changes
 SkillData *__fastcall do_adjusted_skill_data(int player, ushort skill_id)
@@ -1978,7 +1955,7 @@ int do_imposter(int player)
             state->active_type1 = otherstate->active_type1;
             state->active_type2 = otherstate->active_type2;
             state->active_ability = otherstate->active_ability;
-            for(auto i = 1; i < 6; ++i) // NOTE: change 'i = 1' to 'i = 0' to copy HP stat as well 
+            for(auto i = 1; i < 6; ++i) // NOTE: change 'j = 1' to 'j = 0' to copy HP stat as well 
                 state->puppet_stats[i] = otherstate->puppet_stats[i];
             for(auto i = 0; i < 4; ++i)
             {
@@ -2393,8 +2370,8 @@ static void do_exp_yield()
     func();
     if(gamestate == 0)
     {
-        for(auto i = 0; i < 6; ++i)
-            expbuf[i] *= 69;
+        for(auto j = 0; j < 6; ++j)
+            expbuf[j] *= 69;
         memcpy(RVA(0x6fd4bd8), expbuf, sizeof(uint) * 6);
     }
 }
@@ -2871,90 +2848,6 @@ void swap_dolldata()
     }
 }
 
-void load_background()
-{
-    libtpdp::Archive arc;
-    libtpdp::CSVFile names;
-    auto buf = RVA(0x93c188).ptr<uint32_t*>();
-    auto id = *RVA(0x93bcd7).ptr<uint8_t*>();
-
-    try
-    {
-        arc.open(L"dat\\gn_dat5.arc");
-    }
-    catch(libtpdp::ArcError ex)
-    {
-        LOG_ERROR() << L"Could not open gn_dat6.arc: " << ex.what();
-        return;
-    }
-
-    {
-        auto f = arc.get_file("name\\MapLocationName.csv");
-        if(!f)
-        {
-            LOG_ERROR() << L"Could not read MapLocationName.csv!";
-            return;
-        }
-        names.parse(f.data(), f.size());
-    }
-    arc.close();
-
-    try
-    {
-        arc.open(L"dat\\gn_dat1.arc");
-    }
-    catch(libtpdp::ArcError ex)
-    {
-        LOG_ERROR() << L"Could not open gn_dat1.arc: " << ex.what();
-        return;
-    }
-
-    if(id >= names.num_lines())
-        return;
-    auto& entry = names[id];
-    if(entry.size() < 2)
-        return;
-    auto basename = utf_to_sjis(entry[1]);
-    for(size_t i = 0; i < 16; ++i)
-    {
-        if(buf[i] == 0)
-        {
-            auto filepath = "battle\\locationBG\\" + basename + std::to_string(i) + ".png";
-            if(arc.find(filepath) != arc.end()) // check for file existence
-            {
-                filepath = "dat\\gn_dat1\\" + filepath;
-                buf[i] = LoadGraph(filepath.c_str());
-            }
-        }
-    }
-}
-
-__declspec(naked)
-static void _load_background()
-{
-    __asm
-    {
-        pushad
-        pushfd
-        push ebp
-        mov ebp, esp
-        sub esp, __LOCAL_SIZE
-    }
-
-    {
-        load_background();
-    }
-
-    __asm
-    {
-        mov esp, ebp
-        pop ebp
-        popfd
-        popad
-        jmp g_background_return_addr
-    }
-}
-
 void on_main_loop(uint32_t index)
 {
     switch(index)
@@ -3111,13 +3004,83 @@ static void _do_background_bgm()
     }
 }
 
+static void parse_backgrounds()
+{
+    libtpdp::Archive arc;
+    libtpdp::CSVFile names;
+
+    try
+    {
+        arc.open(L"dat\\gn_dat5.arc");
+    }
+    catch(libtpdp::ArcError ex)
+    {
+        LOG_ERROR() << L"Could not open gn_dat6.arc: " << ex.what();
+        return;
+    }
+
+    {
+        auto f = arc.get_file("name\\MapLocationName.csv");
+        if(!f)
+        {
+            LOG_ERROR() << L"Could not read MapLocationName.csv!";
+            return;
+        }
+        names.parse(f.data(), f.size());
+    }
+    arc.close();
+
+    try
+    {
+        arc.open(L"dat\\gn_dat1.arc");
+    }
+    catch(libtpdp::ArcError ex)
+    {
+        LOG_ERROR() << L"Could not open gn_dat1.arc: " << ex.what();
+        return;
+    }
+
+    size_t bufsz = names.num_lines() * 16u;
+    g_locationbg_buf = std::make_unique<uint8_t[]>(bufsz);
+    std::memset(g_locationbg_buf.get(), 0, bufsz);
+    for(int i = 0; i < names.num_lines(); ++i)
+    {
+        auto& entry = names[i];
+        if(entry.size() >= 2)
+        {
+            auto basename = utf_to_sjis(entry[1]);
+            g_locationbg[i] = basename;
+
+            for(size_t j = 0; j < 16; ++j)
+            {
+                auto filepath = "battle\\locationBG\\" + basename + std::to_string(j) + ".png";
+                if(arc.find(filepath) != arc.end()) // check for file existence
+                    g_locationbg_buf[(i * 16) + j] = 1;
+            }
+        }
+    }
+}
+
+static int __cdecl background_sprintf_hook(void *buf, size_t sz, const char *fmt, const char *path, const char *bgname, unsigned int num)
+{
+    auto func = RVA(0x2f0c26).ptr<int(__cdecl*)(void*, size_t, const char*, const char*, const char*, unsigned int)>();
+    auto id = *RVA(0x93bcd7).ptr<uint32_t*>();
+    if(g_locationbg.contains(id))
+        bgname = g_locationbg[id].c_str();
+    return func(buf, sz, fmt, path, bgname, num);
+}
+
 void patch_backgrounds()
 {
-    g_background_return_addr = RVA(0x19bbc).ptr<void*>();
     g_background_bgm_return_addr = RVA(0x175fbe).ptr<void*>();
     patch_call(RVA(0x2528b), &do_backgrounds);
-    patch_jump(RVA(0x19ab0), &_load_background);
+    patch_call(RVA(0x19b2e), &background_sprintf_hook);
     patch_jump(RVA(0x175f77), &_do_background_bgm);
+
+    parse_backgrounds();
+
+    auto ptr = g_locationbg_buf.get();
+    patch_memory(RVA(0x19ab9 + 3), &ptr, sizeof(ptr));
 }
 
 static void patch_dollicon()
