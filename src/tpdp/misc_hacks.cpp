@@ -438,7 +438,7 @@ uint do_dmg_calc(BattleState *state, BattleState *otherstate, int player, [[mayb
         dmg *= g_mod_seiryu_seed; // also Yggdrasil Seed
     }
 
-    if (((uint)state->active_ability == g_id_merciless) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
+    if(((uint)state->active_ability == g_id_merciless) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
     {
         for(auto status : otherpuppet.status_effects)
         {
@@ -449,24 +449,22 @@ uint do_dmg_calc(BattleState *state, BattleState *otherstate, int player, [[mayb
             }
         }
     }
-    else if (((uint)state->active_ability == g_id_astronomy) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
+    else if(((uint)state->active_ability == g_id_astronomy) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
     {
         auto data = get_skill_data();
-        if (data[skill_id].classification == SKILL_CLASS_BU)
+        if(data[skill_id].classification == SKILL_CLASS_BU)
             dmg *= g_mod_class_abl; //astronomy atk boost
     }
-
-    else if (((uint)state->active_ability == g_id_empowered) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
+    else if(((uint)state->active_ability == g_id_empowered) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
     {
         auto data = get_skill_data();
-        if (data[skill_id].classification == SKILL_CLASS_EN)
+        if(data[skill_id].classification == SKILL_CLASS_EN)
             dmg *= g_mod_class_abl; //empowered atk boost
     }
-
-    else if (((uint)state->active_ability == g_id_magic) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
+    else if(((uint)state->active_ability == g_id_magic) && (otherstate->active_ability != 335) && (get_terrain_state()->terrain_type != TERRAIN_KOHRYU))
     {
         auto data = get_skill_data();
-        if (data[skill_id].power >= 120)
+        if(data[skill_id].power >= 120)
             dmg *= g_mod_magic; //magic boost
     }
 
@@ -3304,99 +3302,75 @@ static void draw_type_tabs()
     }
 }
 
-static void draw_hazard_icons()
+static void draw_hazard_icons(int player)
 {
     constexpr auto width = 32;
     constexpr auto height = 32;
 
     constexpr auto base_y = (720 / 2) - (4 * height);
+    auto base_x = (player == 0) ? 0 : (960 - width);
 
-    auto state = get_battle_state(0);
+    auto state = get_battle_state(player);
     auto mines = std::clamp(state->num_mine_trap, 0, 3);
     auto pois = std::clamp(state->num_poison_trap, 0, 2);
-    auto fb_turns = (g_field_barrier_turns[0] > 5u && state->field_barrier_turns > 3) ? state->field_barrier_turns - 3u : state->field_barrier_turns;
-    auto fp_turns = (g_field_protect_turns[0] > 5u && state->field_protect_turns > 3) ? state->field_protect_turns - 3u : state->field_protect_turns;
+    auto fb_turns = (g_field_barrier_turns[player] > 5u && state->field_barrier_turns > 3) ? state->field_barrier_turns - 3u : state->field_barrier_turns;
+    auto fp_turns = (g_field_protect_turns[player] > 5u && state->field_protect_turns > 3) ? state->field_protect_turns - 3u : state->field_protect_turns;
+    auto pos = 0;
 
-    // local player
     if(mines > 0)
-        DrawExtendGraph(0, base_y + (height * 0), 0 + width, base_y + (height * 0) + height, g_hazard_handle_buf[mines - 1], 1);
+    {
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_hazard_handle_buf[mines - 1], 1);
+        ++pos;
+    }
     if(state->stealth_trap)
-        DrawExtendGraph(0, base_y + (height * 1), 0 + width, base_y + (height * 1) + height, g_hazard_handle_buf[3], 1);
+    {
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_hazard_handle_buf[3], 1);
+        ++pos;
+    }
     if(pois > 0)
-        DrawExtendGraph(0, base_y + (height * 2), 0 + width, base_y + (height * 2) + height, g_hazard_handle_buf[6 + (pois - 1)], 1);
+    {
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_hazard_handle_buf[6 + (pois - 1)], 1);
+        ++pos;
+    }
     if(state->bind_trap)
-        DrawExtendGraph(0, base_y + (height * 3), 0 + width, base_y + (height * 3) + height, g_hazard_handle_buf[9], 1);
+    {
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_hazard_handle_buf[9], 1);
+        ++pos;
+    }
     if(state->field_barrier_turns > 0)
     {
-        DrawExtendGraph(0, base_y + (height * 4), 0 + width, base_y + (height * 4) + height, g_hazard_handle_buf[12], 1);
-        DrawExtendGraph(0, base_y + (height * 4), 0 + width, base_y + (height * 4) + height, g_small_number_handle_buf[std::clamp(fb_turns, 0u, 9u)], 1);
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_hazard_handle_buf[12], 1);
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_small_number_handle_buf[std::clamp(fb_turns, 0u, 9u)], 1);
+        ++pos;
     }
     if(state->field_protect_turns > 0)
     {
-        DrawExtendGraph(0, base_y + (height * 5), 0 + width, base_y + (height * 5) + height, g_hazard_handle_buf[15], 1);
-        DrawExtendGraph(0, base_y + (height * 5), 0 + width, base_y + (height * 5) + height, g_small_number_handle_buf[std::clamp(fp_turns, 0u, 9u)], 1);
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_hazard_handle_buf[15], 1);
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_small_number_handle_buf[std::clamp(fp_turns, 0u, 9u)], 1);
+        ++pos;
     }
     if(state->wind_gods_grace_turns > 0)
     {
-        DrawExtendGraph(0, base_y + (height * 6), 0 + width, base_y + (height * 6) + height, g_hazard_handle_buf[18], 1);
-        DrawExtendGraph(0, base_y + (height * 6), 0 + width, base_y + (height * 6) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->wind_gods_grace_turns, 0u, 9u)], 1);
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_hazard_handle_buf[18], 1);
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->wind_gods_grace_turns, 0u, 9u)], 1);
+        ++pos;
     }
     if(state->lucky_rainbow_turns > 0)
     {
-        DrawExtendGraph(0, base_y + (height * 7), 0 + width, base_y + (height * 7) + height, g_hazard_handle_buf[21], 1);
-        DrawExtendGraph(0, base_y + (height * 7), 0 + width, base_y + (height * 7) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->lucky_rainbow_turns, 0u, 9u)], 1);
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_hazard_handle_buf[21], 1);
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->lucky_rainbow_turns, 0u, 9u)], 1);
+        ++pos;
     }
     if(state->veil_of_water_turns > 0)
     {
-        DrawExtendGraph(0, base_y + (height * 8), 0 + width, base_y + (height * 8) + height, g_hazard_handle_buf[24], 1);
-        DrawExtendGraph(0, base_y + (height * 8), 0 + width, base_y + (height * 8) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->veil_of_water_turns, 0u, 9u)], 1);
-    }
-
-    state = get_battle_state(1);
-    mines = std::clamp(state->num_mine_trap, 0, 3);
-    pois = std::clamp(state->num_poison_trap, 0, 2);
-    fb_turns = (g_field_barrier_turns[1] > 5u && state->field_barrier_turns > 3) ? state->field_barrier_turns - 3u : state->field_barrier_turns;
-    fp_turns = (g_field_protect_turns[1] > 5u && state->field_protect_turns > 3) ? state->field_protect_turns - 3u : state->field_protect_turns;
-
-    // opponent
-    constexpr auto base_x = 960 - width;
-    if(mines > 0)
-        DrawExtendGraph(base_x, base_y + (height * 0), base_x + width, base_y + (height * 0) + height, g_hazard_handle_buf[mines - 1], 1);
-    if(state->stealth_trap)
-        DrawExtendGraph(base_x, base_y + (height * 1), base_x + width, base_y + (height * 1) + height, g_hazard_handle_buf[3], 1);
-    if(pois > 0)
-        DrawExtendGraph(base_x, base_y + (height * 2), base_x + width, base_y + (height * 2) + height, g_hazard_handle_buf[6 + (pois - 1)], 1);
-    if(state->bind_trap)
-        DrawExtendGraph(base_x, base_y + (height * 3), base_x + width, base_y + (height * 3) + height, g_hazard_handle_buf[9], 1);
-    if(state->field_barrier_turns > 0)
-    {
-        DrawExtendGraph(0, base_y + (height * 4), 0 + width, base_y + (height * 4) + height, g_hazard_handle_buf[12], 1);
-        DrawExtendGraph(0, base_y + (height * 4), 0 + width, base_y + (height * 4) + height, g_small_number_handle_buf[std::clamp(fb_turns, 0u, 9u)], 1);
-    }
-    if(state->field_protect_turns > 0)
-    {
-        DrawExtendGraph(0, base_y + (height * 5), 0 + width, base_y + (height * 5) + height, g_hazard_handle_buf[15], 1);
-        DrawExtendGraph(0, base_y + (height * 5), 0 + width, base_y + (height * 5) + height, g_small_number_handle_buf[std::clamp(fp_turns, 0u, 9u)], 1);
-    }
-    if(state->wind_gods_grace_turns > 0)
-    {
-        DrawExtendGraph(0, base_y + (height * 6), 0 + width, base_y + (height * 6) + height, g_hazard_handle_buf[18], 1);
-        DrawExtendGraph(0, base_y + (height * 6), 0 + width, base_y + (height * 6) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->wind_gods_grace_turns, 0u, 9u)], 1);
-    }
-    if(state->lucky_rainbow_turns > 0)
-    {
-        DrawExtendGraph(0, base_y + (height * 7), 0 + width, base_y + (height * 7) + height, g_hazard_handle_buf[21], 1);
-        DrawExtendGraph(0, base_y + (height * 7), 0 + width, base_y + (height * 7) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->lucky_rainbow_turns, 0u, 9u)], 1);
-    }
-    if(state->veil_of_water_turns > 0)
-    {
-        DrawExtendGraph(0, base_y + (height * 8), 0 + width, base_y + (height * 8) + height, g_hazard_handle_buf[24], 1);
-        DrawExtendGraph(0, base_y + (height * 8), 0 + width, base_y + (height * 8) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->veil_of_water_turns, 0u, 9u)], 1);
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_hazard_handle_buf[24], 1);
+        DrawExtendGraph(base_x, base_y + (height * pos), base_x + width, base_y + (height * pos) + height, g_small_number_handle_buf[std::clamp((unsigned int)state->veil_of_water_turns, 0u, 9u)], 1);
+        ++pos;
     }
 }
 
 // the most fucked up printf you'll ever see
-static int draw_uint(unsigned int val, int x, int y, int width, int height)
+static int draw_uint(uint32_t val, int x, int y, int width, int height)
 {
     static_assert(sizeof(val) == 4);
     uint8_t digits[10]; // 32-bit int cannot exceed 10 decimal digits
@@ -3495,7 +3469,8 @@ static void draw_battle_overlay()
     func();
 
     draw_type_tabs();
-    draw_hazard_icons();
+    draw_hazard_icons(0);
+    draw_hazard_icons(1);
     draw_weather_timer();
     draw_boost_icons();
     if(g_debug_overlay)
