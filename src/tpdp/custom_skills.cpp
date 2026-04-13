@@ -992,7 +992,7 @@ void init_custom_skills()
     }
 
     g_id_tabula = IniFile::global.get_uint("skills", "effect_id_tabula");
-    if (g_id_tabula != ID_NONE)
+    if(g_id_tabula != ID_NONE)
     {
         init_new_skill(g_id_tabula);
         register_custom_skill(g_id_tabula, &skill_tabula);
@@ -1013,14 +1013,14 @@ void init_custom_skills()
     }
 
     g_id_steps = IniFile::global.get_uint("skills", "effect_id_steps");
-    if (g_id_refresh != ID_NONE)
+    if(g_id_steps != ID_NONE)
     {
         init_new_skill(g_id_steps);
         register_custom_skill(g_id_steps, &skill_steps);
     }
 
     g_id_steps2 = IniFile::global.get_uint("skills", "effect_id_steps2");
-    if (g_id_refresh != ID_NONE)
+    if(g_id_steps2 != ID_NONE)
     {
         init_new_skill(g_id_steps2);
         register_custom_skill(g_id_steps2, &skill_steps2);
@@ -1059,22 +1059,22 @@ void init_custom_skills()
         register_custom_skill(g_id_zephyr, &skill_zephyr);
     }
 
-        g_id_spiritdance = IniFile::global.get_uint("skills", "effect_id_spiritdance");
-    if (g_id_refresh != ID_NONE)
+    g_id_spiritdance = IniFile::global.get_uint("skills", "effect_id_spiritdance");
+    if(g_id_spiritdance != ID_NONE)
     {
         init_new_skill(g_id_spiritdance);
         register_custom_skill(g_id_spiritdance, &skill_spiritdance);
     }
 
     g_id_hearth = IniFile::global.get_uint("skills", "effect_id_hearth");
-    if (g_id_refresh != ID_NONE)
+    if(g_id_hearth != ID_NONE)
     {
         init_new_skill(g_id_hearth);
         register_custom_skill(g_id_hearth, &skill_hearth);
     }
 
     g_id_verdant_border = IniFile::global.get_uint("skills", "effect_id_verdant_border");
-    if (g_id_verdant_border != ID_NONE)
+    if(g_id_verdant_border != ID_NONE)
     {
         init_new_skill(g_id_verdant_border);
         register_custom_skill(g_id_verdant_border, &skill_verdant_border);
